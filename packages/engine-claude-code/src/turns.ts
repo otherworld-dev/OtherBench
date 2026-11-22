@@ -196,8 +196,9 @@ export class ReplyTurns {
         if (next.done) {
           // The process ended (closed, or died) before the turn's result: the reply didn't finish.
           if (!req.signal.aborted) {
-            const text = [live.failure instanceof Error ? live.failure.message : 'Claude Code ended before it finished this reply.', ...live.stderr].join('\n');
-            yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: req.profile.modelId, rateLimitResetsAt, rateLimited }) };
+            // The process's stderr goes in apart from the failure's own words: it also carries MCP servers' noise (see classifyClaudeCodeFailure).
+            const text = live.failure instanceof Error ? live.failure.message : 'Claude Code ended before it finished this reply.';
+            yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: req.profile.modelId, rateLimitResetsAt, rateLimited, stderr: live.stderr }) };
           }
           break;
         }
@@ -220,7 +221,7 @@ export class ReplyTurns {
             continue;
           }
           if (event.type === 'result-error') {
-            if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId, rateLimitResetsAt, rateLimited }) };
+            if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: req.profile.modelId, rateLimitResetsAt, rateLimited, apiStatus: event.status, apiError: event.apiError }) };
             continue;
           }
           if (event.type === 'finish') finished = true;
@@ -367,7 +368,7 @@ export class ReplyTurns {
             live.close();
             if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
             yield* flushNotice();
-            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, rateLimited, autoMode }) };
+            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, rateLimited, autoMode, apiStatus: event.status, apiError: event.apiError }) };
             return 'done';
           } else {
             if (event.type === 'finish') {
@@ -395,10 +396,10 @@ export class ReplyTurns {
     } catch (err) {
       live.close();
       if (req.signal.aborted) return 'done'; // TurnRunner marks the message cancelled
-      const text = [err instanceof Error ? err.message : String(err), ...live.stderr].join('\n');
-      if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(text)) return 'missing-session';
+      const text = err instanceof Error ? err.message : String(err);
+      if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError([text, ...live.stderr].join('\n'))) return 'missing-session';
       yield* flushNotice();
-      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, rateLimited, autoMode }) };
+      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, rateLimited, autoMode, stderr: live.stderr }) };
     } finally {
       this.running.delete(req.messageId);
       tickets.clear();

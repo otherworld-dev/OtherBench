@@ -125,7 +125,9 @@ function causeCodeOf(err: Error): string {
 const NETWORK_FAILURE_PATTERN =
   /ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|EPIPE|fetch failed|network|socket hang up/i;
 const CONTEXT_OVERFLOW_PATTERN =
-  /context.?length|maximum context|context_length_exceeded|too (many|long)|exceeds? the (maximum|context)|prompt is too long/i;
+  // "Too many" and "too long" count only when said of tokens or of the prompt:
+  // a bare `too (many|long)` also read "too many requests" as a full context.
+  /context.?length|maximum context|context_length_exceeded|too many (input |prompt )?tokens|(prompt|input|request|message|conversation) is too long|exceeds? the (maximum|context)/i;
 const CONTENT_FILTER_PATTERN =
   /content.?filter|content policy|safety system|flagged|blocked by (the )?safety|moderation/i;
 const MODEL_NOT_FOUND_PATTERN = /model[^.]*not found|no such model|unknown model|model.*does not exist/i;
@@ -137,6 +139,11 @@ const CAPABILITY_PATTERN = /does not support|not supported|unsupported functiona
  * providers that reuse a generic 400 for context/content-filter/capability
  * failures rather than a distinct status code, and finally to the
  * provider's own `isRetryable` flag for anything left unmatched.
+ *
+ * Every status that says what happened is checked BEFORE any wording: a 5xx
+ * (529 "overloaded" included) is the server's failure and worth another try,
+ * whatever its message mentions. With the 5xx check last, a 503 "too many
+ * requests" matched the context-overflow words and was never retried.
  */
 function classifyApiCallError(
   statusCode: number | undefined,
@@ -145,10 +152,11 @@ function classifyApiCallError(
 ): { kind: ErrorKind; retryable: boolean } {
   if (statusCode === 401 || statusCode === 403) return { kind: 'auth', retryable: false };
   if (statusCode === 429) return { kind: 'rate_limit', retryable: true };
+  if (statusCode !== undefined && statusCode >= 500) return { kind: 'transient', retryable: true };
   if (CONTEXT_OVERFLOW_PATTERN.test(message)) return { kind: 'context_overflow', retryable: false };
   if (CONTENT_FILTER_PATTERN.test(message)) return { kind: 'content_filter', retryable: false };
   if (statusCode === 404 || MODEL_NOT_FOUND_PATTERN.test(message)) return { kind: 'model_not_found', retryable: false };
   if (CAPABILITY_PATTERN.test(message)) return { kind: 'capability', retryable: false };
-  if ((statusCode !== undefined && statusCode >= 500) || isRetryable) return { kind: 'transient', retryable: true };
+  if (isRetryable) return { kind: 'transient', retryable: true };
   return { kind: 'unknown', retryable: false };
 }

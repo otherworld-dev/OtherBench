@@ -109,6 +109,17 @@ function resolverFor(model: MockLanguageModelV3): ProviderResolver {
 
 const ZERO_USAGE = { inputTokens: { total: 0 }, outputTokens: { total: 0 } };
 
+/** A `retryWait` that returns at once and keeps the waits it was asked for. */
+function recordedWaits(): { wait: (ms: number) => Promise<void>; waits: number[] } {
+  const waits: number[] = [];
+  return {
+    waits,
+    wait: async (ms) => {
+      waits.push(ms);
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // stream()
 // ---------------------------------------------------------------------------
@@ -604,7 +615,8 @@ describe('AiSdkChatEngine.stream', () => {
         });
       },
     });
-    const engine = new AiSdkChatEngine(resolverFor(model));
+    const { wait, waits } = recordedWaits();
+    const engine = new AiSdkChatEngine(resolverFor(model), { retryWait: wait });
 
     const events = await drain(engine.stream(makeRequest()));
 
@@ -612,6 +624,169 @@ describe('AiSdkChatEngine.stream', () => {
     expect(events[0]).toMatchObject({
       type: 'error',
       error: { kind: 'rate_limit', retryable: true },
+    });
+    // Tried again three times, a little longer each time, before giving up.
+    expect(model.doStreamCalls).toHaveLength(4);
+    expect(waits).toEqual([1000, 2000, 4000]);
+  });
+
+  describe('trying again after a busy or failed provider', () => {
+    const HELLO = [
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 't1' },
+      { type: 'text-delta', id: 't1', delta: 'Hello' },
+      { type: 'text-end', id: 't1' },
+      { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+    ];
+
+    function apiError(statusCode: number, responseHeaders?: Record<string, string>, message = 'Provider said no'): APICallError {
+      return new APICallError({
+        message,
+        url: 'https://api.example.com/v1/messages',
+        requestBodyValues: {},
+        statusCode,
+        isRetryable: statusCode === 429 || statusCode >= 500,
+        ...(responseHeaders ? { responseHeaders } : {}),
+      });
+    }
+
+    /** A model whose first `failures.length` calls throw, and whose later calls answer "Hello". */
+    function failingThenHello(...failures: unknown[]): MockLanguageModelV3 {
+      let call = 0;
+      return new MockLanguageModelV3({
+        doStream: async () => {
+          const failure = failures[call++];
+          if (failure !== undefined) throw failure;
+          return { stream: streamOf(HELLO) };
+        },
+      });
+    }
+
+    it.each([
+      ['a 429', apiError(429)],
+      ['a 529 overloaded', apiError(529, undefined, 'Overloaded')],
+      ['a 503', apiError(503)],
+      ['a dropped connection', Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })],
+    ])('%s before anything was shown is tried again, and the reply carries no error', async (_name, failure) => {
+      const model = failingThenHello(failure);
+      const { wait, waits } = recordedWaits();
+
+      const events = await drain(new AiSdkChatEngine(resolverFor(model), { retryWait: wait }).stream(makeRequest()));
+
+      expect(events.map((e) => e.type)).toEqual(['text-delta', 'finish']);
+      expect(model.doStreamCalls).toHaveLength(2);
+      expect(waits).toEqual([1000]);
+    });
+
+    it.each([
+      ['retry-after in seconds', { 'retry-after': '3' }, 3000],
+      ['retry-after-ms', { 'retry-after-ms': '1500' }, 1500],
+      ['a retry-after shorter than the usual wait', { 'retry-after': '0' }, 1000],
+    ])('waits as long as the provider asks: %s', async (_name, headers, expected) => {
+      const model = failingThenHello(apiError(429, headers));
+      const { wait, waits } = recordedWaits();
+
+      await drain(new AiSdkChatEngine(resolverFor(model), { retryWait: wait }).stream(makeRequest()));
+
+      expect(waits).toEqual([expected]);
+    });
+
+    it('gives up at once when the provider asks for a longer wait than the cap', async () => {
+      const model = failingThenHello(apiError(429, { 'retry-after': '600' }));
+      const { wait, waits } = recordedWaits();
+
+      const events = await drain(new AiSdkChatEngine(resolverFor(model), { retryWait: wait }).stream(makeRequest()));
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: 'error', error: { kind: 'rate_limit' } });
+      expect(model.doStreamCalls).toHaveLength(1);
+      expect(waits).toEqual([]);
+    });
+
+    it.each([
+      ['a 400', apiError(400)],
+      ['a 401', apiError(401)],
+    ])('%s is not tried again', async (_name, failure) => {
+      const model = failingThenHello(failure);
+      const { wait, waits } = recordedWaits();
+
+      const events = await drain(new AiSdkChatEngine(resolverFor(model), { retryWait: wait }).stream(makeRequest()));
+
+      expect(events).toHaveLength(1);
+      expect(events[0]?.type).toBe('error');
+      expect(model.doStreamCalls).toHaveLength(1);
+      expect(waits).toEqual([]);
+    });
+
+    it('does not try again once text has been shown', async () => {
+      const model = new MockLanguageModelV3({
+        doStream: stepsForModel(
+          [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 't1' },
+            { type: 'text-delta', id: 't1', delta: 'Half an ans' },
+            { type: 'error', error: apiError(529, undefined, 'Overloaded') },
+          ],
+          HELLO
+        ),
+      });
+      const { wait, waits } = recordedWaits();
+
+      const events = await drain(new AiSdkChatEngine(resolverFor(model), { retryWait: wait }).stream(makeRequest()));
+
+      expect(events.some((e) => e.type === 'error')).toBe(true);
+      expect(events.filter((e) => e.type === 'text-delta')).toHaveLength(1);
+      expect(model.doStreamCalls).toHaveLength(1);
+      expect(waits).toEqual([]);
+    });
+
+    it('does not try again once a tool has run, so the tool never runs twice', async () => {
+      const toolExecute = vi.fn(async () => 'written');
+      const toolSpec: ToolSpec = {
+        name: 'write_thing',
+        description: 'Writes a thing.',
+        parameters: { type: 'object', properties: {} },
+        risk: 'mutate',
+        source: 'mcp',
+        execute: toolExecute,
+      };
+      let call = 0;
+      const model = new MockLanguageModelV3({
+        doStream: async () => {
+          call += 1;
+          // The request after the tool ran is the one that fails.
+          if (call === 2) throw apiError(503);
+          return {
+            stream: streamOf([
+              { type: 'stream-start', warnings: [] },
+              { type: 'tool-call', toolCallId: `call-${call}`, toolName: 'write_thing', input: '{}' },
+              { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+            ]),
+          };
+        },
+      });
+      const { wait, waits } = recordedWaits();
+
+      const events = await drain(new AiSdkChatEngine(resolverFor(model), { retryWait: wait }).stream(makeRequest({ tools: [toolSpec] })));
+
+      expect(events.some((e) => e.type === 'error')).toBe(true);
+      expect(toolExecute).toHaveBeenCalledTimes(1);
+      expect(model.doStreamCalls).toHaveLength(2);
+      expect(waits).toEqual([]);
+    });
+
+    it('stops waiting, and sends nothing more, when the reply is stopped during the wait', async () => {
+      const controller = new AbortController();
+      const model = failingThenHello(apiError(429));
+      const wait = vi.fn(async () => {
+        controller.abort();
+      });
+
+      const events = await drain(new AiSdkChatEngine(resolverFor(model), { retryWait: wait }).stream(makeRequest({ signal: controller.signal })));
+
+      expect(events).toEqual([]);
+      expect(wait).toHaveBeenCalledTimes(1);
+      expect(model.doStreamCalls).toHaveLength(1);
     });
   });
 
