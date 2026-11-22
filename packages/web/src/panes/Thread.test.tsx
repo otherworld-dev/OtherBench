@@ -438,7 +438,7 @@ describe('Thread', () => {
     });
     const other = variantMessage('other', 'root', { createdAt: 2 });
     useOtherBenchStore.getState().loadMessages('chat-1', [root, failing, other], null);
-    const usage = { inputTokens: 3, outputTokens: 4 };
+    const usage = { tokensIn: 3, tokensOut: 4, tokensCached: 0, tokensReasoning: 0 };
     useOtherBenchStore.setState({ extras: { failing: { usage, pendingApprovals: [] } } });
     const failed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     mockedRetry.mockRejectedValue(new Error('the server is restarting'));
