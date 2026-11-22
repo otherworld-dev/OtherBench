@@ -12,7 +12,6 @@ function Fragile({ label = 'drawn fine' }: { label?: string }): JSX.Element {
   return <p>{label}</p>;
 }
 function CountsMounts(): JSX.Element {
-  // eslint-disable-next-line react-hooks/globals -- the test counts mounts: Try again must re-mount, not just re-render.
   mounts += 1;
   return <Fragile />;
 }
