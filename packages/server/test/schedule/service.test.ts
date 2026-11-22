@@ -11,6 +11,7 @@ import { collectMessageTree } from '../../src/routes/chats.js';
 import { ScheduleBusyError, ScheduleService, type ScheduleServiceDeps } from '../../src/schedule/service.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
+import { TurnGate } from '../../src/turn-gate.js';
 import { startTurn, type TurnStartDeps } from '../../src/turn-start.js';
 import { ManualClock } from '../memory/manual-clock.js';
 
@@ -78,6 +79,7 @@ let bus: AppEventBus;
 let events: AppEvent[];
 let runner: TurnRunner;
 let turnDeps: TurnStartDeps;
+let gate: TurnGate;
 let service: ScheduleService;
 
 async function resolveP(id: string): Promise<ResolvedProfile> {
@@ -90,10 +92,10 @@ function build(over: Partial<ScheduleServiceDeps> = {}): ScheduleService {
   return new ScheduleService({
     store,
     turnRunner: runner,
-    startTurn: (input) => startTurn(turnDeps, input),
+    startTurn: (input, claim) => startTurn(turnDeps, input, claim),
     resolveProfile: resolveP,
     resolveWorkspace: (ws) => resolveWorkspace(ws, store.nodes.self().id, store.locations.allPaths(), () => true),
-    isChatBusy: (chatId) => bus.runningTurns().some((t) => t.chatId === chatId),
+    gate,
     emit: (e) => bus.emit(e),
     now: clock.now,
     scheduler: clock,
@@ -136,7 +138,8 @@ beforeEach(() => {
   bus.attach(runner, store);
   events = [];
   bus.subscribe((e) => events.push(e));
-  turnDeps = { store, turnRunner: runner, streamRegistry: new StreamRegistry(runner, store), events: bus };
+  gate = new TurnGate((chatId) => bus.runningTurns().some((t) => t.chatId === chatId));
+  turnDeps = { store, turnRunner: runner, streamRegistry: new StreamRegistry(runner, store), events: bus, turnGate: gate };
   store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
   store.profiles.create({
     id: 'p1', name: 'Mock', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {},
@@ -590,7 +593,7 @@ describe('ScheduleService: targets, endings and Run now', () => {
 
   it('Run now names a reply being written, not waiting notes, when both hold', () => {
     service.dispose();
-    service = build({ isChatBusy: (chatId) => chatId === 'chat-1', hasWaitingNotes: (chatId) => chatId === 'chat-1' });
+    service = build({ gate: new TurnGate((chatId) => chatId === 'chat-1'), hasWaitingNotes: (chatId) => chatId === 'chat-1' });
     addSchedule('s1', { nextRunAt: NINE + 24 * HOUR });
     service.start();
     expect(() => service.runNow('s1')).toThrow(

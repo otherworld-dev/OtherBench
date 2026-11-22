@@ -11,6 +11,7 @@ import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { MessageStatus, Part } from '@otherbench/core/types/messages.js';
 import type { Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import { chatTip } from '../chat-read.js';
+import type { TurnClaim, TurnGate } from '../turn-gate.js';
 import { lineAfter } from '../turn-start.js';
 import { CANCELLED_BY_USER, notHereReason, sendsOffReason, unreachableReason, type ChatSendRemote, type Handover, type HandoverAnswer, type Outcome } from './remote-port.js';
 
@@ -22,13 +23,13 @@ export interface ChatSendDeps {
     cancel(messageId: string, notice?: string): void;
     runningInfo(messageId: string): { chatId: string; unattended: boolean } | null;
   };
-  /** `startTurn` bound to the container (turn-start.ts). */
-  startTurn: (input: TurnInput) => Promise<TurnResult>;
+  /** `startTurn` bound to the container (turn-start.ts), with the claim on the chat the turn goes into. */
+  startTurn: (input: TurnInput, claim?: TurnClaim) => Promise<TurnResult>;
   resolveProfile: (profileId: string) => Promise<ResolvedProfile>;
   /** A folder resolved on this machine, or on paired machine `on` (`workspaceResolver(container)`). */
   resolveWorkspace: (ws: Workspace | null, on?: string) => WorkspaceStatus;
-  /** Whether a reply is being written in the chat (`events.runningTurns()`). */
-  isChatBusy: (chatId: string) => boolean;
+  /** Whether a chat is busy, and where a chat is taken while a message or a resume is started in it (turn-gate.ts). */
+  gate: TurnGate;
   /** Whether the chat has the user's messages waiting to go out (`NotesService.hasWaiting`): they go first. */
   hasWaitingNotes?: (chatId: string) => boolean;
   /** A new chat in an app (routes/chats.ts `createAppChat`), under `id` when given. */
@@ -119,8 +120,6 @@ export class ChatSendService implements ChatMessenger {
   private readonly now: () => number;
   private readonly generateId: () => string;
   private readonly pending = new Set<Promise<void>>();
-  /** Chats a turn is being started in by this service right now: one at a time per chat. */
-  private readonly starting = new Set<string>();
   /** Sends being handed to, or a stop or outcome being told to, a paired machine right now: one call per send at a time. */
   private readonly handing = new Set<string>();
   private readonly telling = new Set<string>();
@@ -286,7 +285,7 @@ export class ChatSendService implements ChatMessenger {
         chatId: c.id,
         title: c.title,
         app: c.appId === null ? null : (apps.get(c.appId) ?? null),
-        busy: c.runsOn === self ? this.deps.isChatBusy(c.id) : (this.deps.remote?.activeChats(c.runsOn).includes(c.id) ?? false),
+        busy: c.runsOn === self ? this.deps.gate.isBusy(c.id) : (this.deps.remote?.activeChats(c.runsOn).includes(c.id) ?? false),
         machine: this.machineName(c.runsOn),
         acceptsSends: this.acceptsSends(c.runsOn),
       }));
@@ -410,7 +409,9 @@ export class ChatSendService implements ChatMessenger {
       made.push({ row, title: chat?.title ?? titleFrom(text), app });
     }
     this.changed([...touched]);
-    for (const { row } of made) if (row.toNode === null) this.drain(row.toChatId);
+    // The chats a message is on its way into already: held by this service's own start, not waiting behind anything.
+    const going = new Set<string>();
+    for (const { row } of made) if (row.toNode === null && this.drain(row.toChatId)) going.add(row.toChatId);
     // Handed over before answering, so the model is told which ones wait for a machine that is off.
     await Promise.all(made.filter(({ row }) => row.toNode !== null).map(({ row }) => this.handOverRow(row.id)));
     const sent = made.map(({ row, title, app }) => {
@@ -421,7 +422,7 @@ export class ChatSendService implements ChatMessenger {
         title,
         app,
         createdChat: row.createdChat,
-        queued: row.toNode === null && this.isBusy(row.toChatId),
+        queued: row.toNode === null && !going.has(row.toChatId) && this.isBusy(row.toChatId),
         machine: this.machineName(row.toNode ?? self),
         held: now.status === 'queued' && now.heldReason !== null,
       };
@@ -732,7 +733,25 @@ export class ChatSendService implements ChatMessenger {
   }
 
   private isBusy(chatId: string): boolean {
-    return this.deps.isChatBusy(chatId) || (this.deps.hasWaitingNotes?.(chatId) ?? false);
+    return this.deps.gate.isBusy(chatId) || this.notesWaiting(chatId);
+  }
+
+  private notesWaiting(chatId: string): boolean {
+    return this.deps.hasWaitingNotes?.(chatId) ?? false;
+  }
+
+  /**
+   * Takes `chatId` for a turn this service is about to start, if it is free: no reply running, nothing else being
+   * started there (by this service or anything else), and none of the user's own messages waiting. One at a time
+   * per chat. Null when it is busy.
+   */
+  private claim(chatId: string): TurnClaim | null {
+    return this.notesWaiting(chatId) ? null : this.deps.gate.claim(chatId);
+  }
+
+  /** Whether the chat is still this start's alone, after something was awaited: the user may have started something there meanwhile. */
+  private stillFree(claim: TurnClaim): boolean {
+    return this.deps.gate.holdsAlone(claim) && !this.notesWaiting(claim.chatId);
   }
 
   private changed(chatIds: string[]): void {
@@ -751,27 +770,26 @@ export class ChatSendService implements ChatMessenger {
   }
 
   /**
-   * Starts the oldest message waiting for `chatId`, if the chat is free: no reply running, none of the user's
-   * own messages waiting, and nothing else being started there by this service. A chat that has gone fails
-   * everything waiting for it.
+   * Starts the oldest message waiting for `chatId`, if the chat is free (`claim`), and says whether it did. A chat
+   * that has gone fails everything waiting for it.
    */
-  private drain(chatId: string): void {
-    if (this.starting.has(chatId)) return;
+  private drain(chatId: string): boolean {
     // Rows handed to a paired machine are delivered there.
     const queued = this.store.chatSends.byToChat(chatId).filter((r) => r.status === 'queued' && r.toNode === null);
-    if (queued.length === 0) return;
+    if (queued.length === 0) return false;
     const chat = this.store.chats.get(chatId);
     if (!chat) {
       for (const row of queued) this.settle(row.id, 'failed', null, 'The chat was deleted before the message could go out.');
-      return;
+      return false;
     }
-    if (this.isBusy(chatId)) return;
-    this.starting.add(chatId);
-    this.track(this.deliver(queued[0]!, chat).finally(() => this.starting.delete(chatId)));
+    const claim = this.claim(chatId);
+    if (!claim) return false;
+    this.track(this.deliver(queued[0]!, chat, claim).finally(() => claim.release()));
+    return true;
   }
 
   /** One message into its chat as a new turn, marked as from the chat that sent it. A failure settles it as failed. */
-  private async deliver(row: ChatSend, chat: Chat): Promise<void> {
+  private async deliver(row: ChatSend, chat: Chat, claim: TurnClaim): Promise<void> {
     let replyId: string;
     try {
       const from = this.store.chats.get(row.fromChatId);
@@ -785,19 +803,22 @@ export class ChatSendService implements ChatMessenger {
       // Stopped (or settled some other way) while the profile resolved: nothing goes out.
       if (this.store.chatSends.get(row.id)?.status !== 'queued') return;
       // The user started something there meanwhile: it stays queued and goes when that ends.
-      if (this.isBusy(now.id)) return;
+      if (!this.stillFree(claim)) return;
       const parentId = chatTip(this.store, now.id, now.headMessageId);
       const release = row.fromNode !== null ? this.deps.markPeerTurn?.(now.id, row.fromNode) : undefined;
       try {
-        const result = await this.deps.startTurn({
-          chatId: now.id,
-          parentId,
-          userParts: [
-            { type: 'chat-link', kind: 'from', chats: [{ chatId: row.fromChatId, title: fromTitle }], sendIds: [row.id] },
-            { type: 'text', text: deliveredText({ title: fromTitle, chatId: row.fromChatId, appName }, row.text) },
-          ],
-          profiles: [profile],
-        });
+        const result = await this.deps.startTurn(
+          {
+            chatId: now.id,
+            parentId,
+            userParts: [
+              { type: 'chat-link', kind: 'from', chats: [{ chatId: row.fromChatId, title: fromTitle }], sendIds: [row.id] },
+              { type: 'text', text: deliveredText({ title: fromTitle, chatId: row.fromChatId, appName }, row.text) },
+            ],
+            profiles: [profile],
+          },
+          claim
+        );
         replyId = result.assistantMessageIds[0]!;
       } finally {
         release?.();
@@ -905,10 +926,10 @@ export class ChatSendService implements ChatMessenger {
   private resumeDue(): void {
     for (const fromMessageId of [...this.due]) {
       const chatId = this.store.chatSends.byFromMessage(fromMessageId)[0]?.fromChatId;
-      if (chatId === undefined || this.starting.has(chatId) || this.isBusy(chatId)) continue;
+      const claim = chatId === undefined ? null : this.claim(chatId);
+      if (chatId === undefined || !claim) continue;
       this.due.delete(fromMessageId);
-      this.starting.add(chatId);
-      this.track(this.resume(fromMessageId, chatId).finally(() => this.starting.delete(chatId)));
+      this.track(this.resume(fromMessageId, chatId, claim).finally(() => claim.release()));
     }
   }
 
@@ -917,7 +938,7 @@ export class ChatSendService implements ChatMessenger {
    * after the sending reply, if the thread ends where no turn can follow). It runs as the profile that sent them.
    * The rows the sending reply works on for another chat move to the new reply, so they settle when it ends.
    */
-  private async resume(fromMessageId: string, chatId: string): Promise<void> {
+  private async resume(fromMessageId: string, chatId: string, claim: TurnClaim): Promise<void> {
     const group = this.store.chatSends.byFromMessage(fromMessageId);
     if (group.some((r) => !isSettled(r.status) || r.resumedAs !== null)) return;
     const chat = this.store.chats.get(chatId);
@@ -931,7 +952,7 @@ export class ChatSendService implements ChatMessenger {
       const profile = await this.deps.resolveProfile(sentAs).catch(() => this.deps.resolveProfile(chat.profileId));
       // Closed (stopped, cleared) or busy again while the profile resolved: closed stays closed, busy waits its turn.
       if (this.store.chatSends.byFromMessage(fromMessageId).some((r) => r.resumedAs !== null)) return;
-      if (this.isBusy(chat.id)) {
+      if (!this.stillFree(claim)) {
         this.due.add(fromMessageId);
         return;
       }
@@ -946,15 +967,18 @@ export class ChatSendService implements ChatMessenger {
       const from = group.find((r) => r.toNode !== null)?.toNode;
       const release = from ? this.deps.markPeerTurn?.(chat.id, from) : undefined;
       try {
-        const result = await this.deps.startTurn({
-          chatId: chat.id,
-          parentId,
-          userParts: [
-            { type: 'chat-link', kind: 'replies', chats: rows.map(({ row, title }) => ({ chatId: row.toChatId, title, status: row.status })), sendIds: group.map((r) => r.id) },
-            { type: 'text', text: repliesText(rows.map(({ row, title }) => ({ title, chatId: row.toChatId, status: row.status, text: row.replyText, reason: row.reason }))) },
-          ],
-          profiles: [profile],
-        });
+        const result = await this.deps.startTurn(
+          {
+            chatId: chat.id,
+            parentId,
+            userParts: [
+              { type: 'chat-link', kind: 'replies', chats: rows.map(({ row, title }) => ({ chatId: row.toChatId, title, status: row.status })), sendIds: group.map((r) => r.id) },
+              { type: 'text', text: repliesText(rows.map(({ row, title }) => ({ title, chatId: row.toChatId, status: row.status, text: row.replyText, reason: row.reason }))) },
+            ],
+            profiles: [profile],
+          },
+          claim
+        );
         replyId = result.assistantMessageIds[0]!;
       } finally {
         release?.();

@@ -7,7 +7,7 @@ import { MAX_BROWSER_ALLOWED_SITES, parseAllowedSites } from '@otherbench/core/d
 import type { MediaChoice, MediaPolicy, ModelParams, Profile, ToolPolicy } from '@otherbench/core/types/config.js';
 import { sweepOrphanedBlobs } from '@otherbench/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
-import { optionalBoolean, optionalNullableString, optionalStringArray, parseSandboxHosts, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, optionalNullableString, optionalStringArray, parseSandboxHosts, requireNonEmptyString, readJsonBody } from '../validation.js';
 import { clearAppDefaultProfile } from './apps.js';
 import { clearProjectDefaultProfile } from './projects.js';
 import { clearMemoryProfile } from './settings.js';
@@ -211,7 +211,7 @@ export function profilesRoutes(container: Container): Hono {
   app.get('/', (c) => c.json(container.store.profiles.list()));
 
   app.post('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ProfileBody;
+    const body = (await readJsonBody(c)) as ProfileBody;
     requireChatConnection(container, requireNonEmptyString(body.connectionId, 'connectionId'));
     const created = container.store.profiles.create({
       id: randomUUID(),
@@ -236,7 +236,7 @@ export function profilesRoutes(container: Container): Hono {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const existing = getProfileOrThrow(container, id);
-    const body = (await c.req.json().catch(() => ({}))) as ProfileBody;
+    const body = (await readJsonBody(c)) as ProfileBody;
 
     const patch: Partial<Omit<Profile, 'id'>> = {};
     if (body.name !== undefined) patch.name = requireNonEmptyString(body.name, 'name');

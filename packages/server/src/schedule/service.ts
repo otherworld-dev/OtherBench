@@ -18,6 +18,7 @@ import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { MessageStatus } from '@otherbench/core/types/messages.js';
 import type { Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
+import type { TurnClaim, TurnGate } from '../turn-gate.js';
 import { chatTip, collectMessageTree } from '../chat-read.js';
 import { runAttachmentParts } from './attachments.js';
 
@@ -37,14 +38,14 @@ export interface ScheduleServiceDeps {
   store: Store;
   /** `cancel` is Stop's own (`POST /messages/:id/cancel`); its notice is what the stopped reply ends with. */
   turnRunner: { on(cb: (e: TurnEvent) => void): () => void; cancel(messageId: string, notice?: string): void };
-  /** `startTurn` bound to the container (turn-start.ts). */
-  startTurn: (input: TurnInput) => Promise<TurnResult>;
+  /** `startTurn` bound to the container (turn-start.ts), with the claim on the run's chat. */
+  startTurn: (input: TurnInput, claim?: TurnClaim) => Promise<TurnResult>;
   /** Rejects with a message the run records (a missing connection, one bound to another machine). */
   resolveProfile: (profileId: string) => Promise<ResolvedProfile>;
   /** A folder resolved on this machine (`workspaceResolver(container)`). */
   resolveWorkspace: (ws: Workspace | null) => WorkspaceStatus;
-  /** Whether a reply is being written in the chat (`events.runningTurns()`). */
-  isChatBusy: (chatId: string) => boolean;
+  /** Whether a chat is busy, and where a run's chat is taken while the run is set up (turn-gate.ts). */
+  gate: TurnGate;
   /** Whether the chat has messages sent during a reply still to go out (`NotesService.hasWaiting`): they go before a run. */
   hasWaitingNotes?: (chatId: string) => boolean;
   emit: (e: AppEvent) => void;
@@ -99,15 +100,15 @@ export class ScheduleService {
   private readonly startTurn: ScheduleServiceDeps['startTurn'];
   private readonly resolveProfile: ScheduleServiceDeps['resolveProfile'];
   private readonly resolveWorkspace: ScheduleServiceDeps['resolveWorkspace'];
-  private readonly isChatBusy: ScheduleServiceDeps['isChatBusy'];
+  private readonly gate: TurnGate;
   private readonly hasWaitingNotes: NonNullable<ScheduleServiceDeps['hasWaitingNotes']>;
   private readonly emit: ScheduleServiceDeps['emit'];
   private readonly now: () => number;
   private readonly scheduler: Scheduler;
   private readonly limits: ScheduleLimits;
   private readonly generateId: () => string;
-  /** scheduleId -> the chat its run will write in, while the run is being set up (null until a project run has made its chat). */
-  private readonly starting = new Map<string, string | null>();
+  /** scheduleId -> its claim on the chat its run will write in, while the run is being set up (null until a project run has made its chat). */
+  private readonly starting = new Map<string, TurnClaim | null>();
   /** messageId -> the run writing it. */
   private readonly active = new Map<string, ActiveRun>();
   private readonly launches = new Set<Promise<void>>();
@@ -121,7 +122,7 @@ export class ScheduleService {
     this.startTurn = deps.startTurn;
     this.resolveProfile = deps.resolveProfile;
     this.resolveWorkspace = deps.resolveWorkspace;
-    this.isChatBusy = deps.isChatBusy;
+    this.gate = deps.gate;
     this.hasWaitingNotes = deps.hasWaitingNotes ?? (() => false);
     this.emit = deps.emit;
     this.now = deps.now ?? Date.now;
@@ -235,17 +236,16 @@ export class ScheduleService {
   /**
    * A reply is being written in the chat, messages sent during one are
    * still to go out (spec 2026-10-18-send-while-replying-design: they go
-   * first), or one of this service's runs is about to write one there. The
-   * last matters: `turn-started` (what `isChatBusy` sees) only fires once a
-   * run's `startTurn` has resolved, so two schedules due together on one chat
-   * would otherwise both start off the same parent.
+   * first), or a turn is being started there, by one of this service's runs
+   * or anything else (the turn gate holds the chat from the moment a starter
+   * takes it, not from `turn-started`, so two schedules due together on one
+   * chat never both start off the same parent).
    *
    * Says which: `notes` only when no reply is on its way, so Run now can
    * say what it is really waiting for. Null when the chat is free.
    */
   private chatInUse(chatId: string): 'reply' | 'notes' | null {
-    if (this.isChatBusy(chatId)) return 'reply';
-    if ([...this.starting.values()].includes(chatId)) return 'reply';
+    if (this.gate.isBusy(chatId)) return 'reply';
     if ([...this.active.values()].some((r) => r.chatId === chatId)) return 'reply';
     return this.hasWaitingNotes(chatId) ? 'notes' : null;
   }
@@ -273,10 +273,18 @@ export class ScheduleService {
     this.announceFinished(schedule, run);
   }
 
-  /** Synchronously: marks the schedule starting, moves its timetable on (unless manual) and writes the run; then sets the run up in the background. */
+  /**
+   * Synchronously: takes the run's chat (the callers have just found it free), marks the schedule starting, moves
+   * its timetable on (unless manual) and writes the run; then sets the run up in the background.
+   */
   private begin(schedule: Schedule, trigger: ScheduleTrigger, dueAt: number | null): ScheduleRun {
     const now = this.now();
-    this.starting.set(schedule.id, schedule.target.kind === 'chat' ? schedule.target.chatId : null);
+    let claim: TurnClaim | null = null;
+    if (schedule.target.kind === 'chat') {
+      claim = this.gate.claim(schedule.target.chatId);
+      if (!claim) throw new ScheduleBusyError('busy', 'A reply is being written in this chat. Try again when it has finished.');
+    }
+    this.starting.set(schedule.id, claim);
     let run: ScheduleRun;
     try {
       run = this.store.transaction(() => {
@@ -286,7 +294,7 @@ export class ScheduleService {
         return this.store.schedules.addRun({ id: this.generateId(), scheduleId: schedule.id, trigger, dueAt, startedAt: now, status: 'running' });
       });
     } catch (err) {
-      this.starting.delete(schedule.id);
+      this.started(schedule.id);
       throw err;
     }
     const launch: Promise<void> = this.launch(schedule, run)
@@ -309,7 +317,9 @@ export class ScheduleService {
       if (this.disposed) return;
       const target = this.prepareTarget(schedule, run, profile);
       chatId = target.chatId;
-      this.starting.set(schedule.id, target.chatId);
+      // A project run's chat was made just now: taken here, like a chat run's was when it was found free.
+      const claim = this.starting.get(schedule.id) ?? this.gate.claim(target.chatId);
+      this.starting.set(schedule.id, claim);
       const previous = this.store.schedules.lastCompleted(schedule.id);
       // Auto mode is Claude Code's: on any other profile the schedule's Auto changes nothing.
       const autoMode = schedule.autoMode && profile.connection.kind === 'claude_code';
@@ -326,32 +336,41 @@ export class ScheduleService {
       });
       // The schedule's files, copied into the run's chat on the same blobs; sent after the text, as the composer sends them.
       const files = runAttachmentParts(this.store, schedule.id, target.chatId, this.generateId);
-      const result = await this.startTurn({
-        chatId: target.chatId,
-        parentId: target.parentId,
-        userParts: [{ type: 'text', text }, ...files],
-        profiles: [profile],
-        unattended: true,
-        ...(autoMode ? { unattendedAuto: true } : {}),
-      });
+      const result = await this.startTurn(
+        {
+          chatId: target.chatId,
+          parentId: target.parentId,
+          userParts: [{ type: 'text', text }, ...files],
+          profiles: [profile],
+          unattended: true,
+          ...(autoMode ? { unattendedAuto: true } : {}),
+        },
+        claim ?? undefined
+      );
       // The turn has started, but the container's shutdown owns it now.
       if (this.disposed) return;
       const messageId = result.assistantMessageIds[0];
       if (!messageId) throw new Error('The turn started without a reply.');
       const recorded = this.store.schedules.updateRun(run.id, { userMessageId: result.userMessageId, messageId });
-      this.starting.delete(schedule.id);
+      this.started(schedule.id);
       // The schedule was deleted meanwhile: the reply finishes unrecorded.
       if (recorded) this.track(schedule, recorded, target.chatId, messageId);
     } catch (err) {
-      this.starting.delete(schedule.id);
+      this.started(schedule.id);
       if (this.disposed) return;
       const ended = this.store.schedules.updateRun(run.id, { status: 'not_started', detail: errorMessage(err), finishedAt: this.now() });
       if (ended) this.announceFinished(schedule, ended, chatId);
       // A slot is free again: a schedule waiting for one may go now.
       this.poke();
     } finally {
-      this.starting.delete(schedule.id);
+      this.started(schedule.id);
     }
+  }
+
+  /** The schedule's run is no longer being set up (its reply is running, or it never started): its chat is let go. */
+  private started(scheduleId: string): void {
+    this.starting.get(scheduleId)?.release();
+    this.starting.delete(scheduleId);
   }
 
   private async profileFor(schedule: Schedule): Promise<ResolvedProfile> {

@@ -8,6 +8,7 @@ import type { NoteAttachment } from '@otherbench/core/types/messages.js';
 import { NotesService } from '../../src/notes/service.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry, type ChatStreamEvent } from '../../src/stream/registry.js';
+import { TurnGate, type TurnClaim } from '../../src/turn-gate.js';
 import { startTurn } from '../../src/turn-start.js';
 
 const FINISH: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
@@ -100,12 +101,14 @@ function setup() {
   const events = new AppEventBus();
   const appEvents: AppEvent[] = [];
   events.subscribe((e) => appEvents.push(e));
-  const deps = { store, turnRunner, streamRegistry, events };
-  const startTurnSpy = vi.fn((input: TurnInput) => startTurn(deps, input));
+  // No app event bus hears replies end here, so the gate reads what is streaming from the runner and the store.
+  const turnGate = new TurnGate((chatId) => turnRunner.runningIn(chatId).some((id) => store.messages.get(id)?.status === 'streaming'));
+  const deps = { store, turnRunner, streamRegistry, events, turnGate };
+  const startTurnSpy = vi.fn((input: TurnInput, claim?: TurnClaim) => startTurn(deps, input, claim));
   const resolveProfile = vi.fn(async (id: string) => profile(id));
   let clock = 1_000;
   let ids = 0;
-  const notes = new NotesService({ store, turnRunner, engine, streamRegistry, startTurn: startTurnSpy, resolveProfile, events, now: () => clock, generateId: () => `note-${++ids}` });
+  const notes = new NotesService({ store, turnRunner, engine, streamRegistry, startTurn: startTurnSpy, resolveProfile, gate: turnGate, events, now: () => clock, generateId: () => `note-${++ids}` });
   service = notes;
   // As the container wires it.
   turnRunner.on((e) => {
@@ -120,7 +123,7 @@ function setup() {
   const ended = (messageId: string) => vi.waitFor(() => expect(store.messages.get(messageId)!.status).not.toBe('streaming'));
   const resolved = () => heard.filter((e): e is Extract<ChatStreamEvent, { type: 'note-resolved' }> => e.type === 'note-resolved');
 
-  return { store, engine, sendToReply, withdrawNote, notes, turnRunner, streamRegistry, startTurnSpy, resolveProfile, appEvents, heard, running, ended, resolved, advance: (ms: number) => (clock += ms) };
+  return { store, engine, sendToReply, withdrawNote, notes, turnRunner, turnGate, streamRegistry, startTurnSpy, resolveProfile, appEvents, heard, running, ended, resolved, advance: (ms: number) => (clock += ms) };
 }
 
 type Ctx = ReturnType<typeof setup>;
@@ -802,5 +805,64 @@ describe('NotesService', () => {
     expect(ctx.heard).toHaveLength(before);
     expect(ctx.notes.helloState('chat-1')).toEqual({ notes: [], noteOutcomes: [] });
     expect(ctx.notes.isBusy('chat-1')).toBe(false);
+  });
+
+  it('the chat is taken in the turn gate while its wait notes are made into a turn, and let go once the reply is announced', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    await ctx.notes.send(input({ text: 'waiting', parentId: r!, profileIds: ['p2'] }));
+    let arrive!: () => void;
+    const waited = new Promise<void>((resolve) => (arrive = resolve));
+    ctx.resolveProfile.mockImplementationOnce(async (id: string) => {
+      await waited;
+      return profile(id);
+    });
+
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    await vi.waitFor(() => expect(ctx.resolveProfile).toHaveBeenCalled());
+    expect(ctx.startTurnSpy).not.toHaveBeenCalled();
+    // Nothing else may start a turn here while the notes' profile resolves.
+    expect(ctx.turnGate.claim('chat-1')).toBeNull();
+
+    arrive();
+    await vi.waitFor(() => expect(ctx.resolved().map((e) => e.outcome)).toEqual(['turn']));
+    const turn = (await ctx.startTurnSpy.mock.results[0]!.value) as Awaited<ReturnType<typeof startTurn>>;
+    // Busy now because the notes' reply runs, not because anything is still held.
+    ctx.engine.finish(turn.assistantMessageIds[0]!);
+    await ctx.ended(turn.assistantMessageIds[0]!);
+    expect(ctx.turnGate.isBusy('chat-1')).toBe(false);
+  });
+
+  it('wait notes stay waiting while something else is starting a turn in the chat, and go once the chat is free', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    const note = (await ctx.notes.send(input({ text: 'waiting', parentId: r!, profileIds: ['p2'] })))!;
+    // As a turn Claude Code started by itself, or a job turn, holds the chat while its reply is made.
+    const other = ctx.turnGate.hold('chat-1');
+
+    ctx.engine.finish(r!);
+    await ctx.ended(r!);
+    await Promise.resolve();
+    expect(ctx.startTurnSpy).not.toHaveBeenCalled();
+    expect(ctx.resolved()).toEqual([]);
+    expect(ctx.notes.helloState('chat-1').notes.map((n) => n.id)).toEqual([note.id]);
+
+    other.release();
+    // The reply that start made ends: the notes get their look, as after any reply.
+    ctx.notes.replyEnded(r!, 'complete');
+    await vi.waitFor(() => expect(ctx.resolved().map((e) => e.outcome)).toEqual(['turn']));
+    expect(ctx.startTurnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('notes whose turn cannot start let the chat go and come back to the box', async () => {
+    const ctx = setup();
+    const { assistantMessageIds: [r] } = await ctx.running();
+    await ctx.notes.send(input({ text: 'waiting', parentId: r!, profileIds: ['p2'] }));
+    ctx.resolveProfile.mockRejectedValueOnce(new Error('The connection is gone.'));
+
+    ctx.engine.finish(r!);
+    await vi.waitFor(() => expect(ctx.resolved().map((e) => e.outcome)).toEqual(['returned']));
+    expect(ctx.turnGate.isBusy('chat-1')).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { Container } from '../container.js';
 import { codeCall } from '../code/route-errors.js';
 import type { OverviewService } from '../overview/service.js';
+import { readJsonBody } from '../validation.js';
 
 /**
  * The Overview (spec 2026-10-26-overview-design): what needs the user across
@@ -49,7 +50,7 @@ export function overviewRoutes(container: Container): Hono {
 
   app.post('/tick-older', async (c) => {
     const overview = service();
-    const body = (await c.req.json().catch(() => ({}))) as { olderThan?: unknown };
+    const body = (await readJsonBody(c)) as { olderThan?: unknown };
     if (typeof body.olderThan !== 'number' || !Number.isFinite(body.olderThan) || body.olderThan < 0) {
       throw new HTTPException(400, { message: '"olderThan" must be a number of milliseconds, 0 or more.' });
     }

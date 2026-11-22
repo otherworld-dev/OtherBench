@@ -10,7 +10,7 @@ import { gcBlobIfOrphaned, withPinnedSha } from '@otherbench/store-sqlite/blob-g
 import { sha256Of } from '@otherbench/store-sqlite/blob-store.js';
 import type { Container } from '../container.js';
 import { extractAttachmentText } from '../attachment-text.js';
-import { requireNonEmptyString } from '../validation.js';
+import { requireNonEmptyString, readJsonBody } from '../validation.js';
 
 /**
  * 25MB per-file cap (task 21 decision #1). The upload route holds the whole
@@ -411,7 +411,7 @@ export function attachmentsRoutes(container: Container): Hono {
     if (!(c.req.header('content-type') ?? '').toLowerCase().startsWith('application/json')) {
       throw new HTTPException(415, { message: 'Expected a JSON body: {"path": "<absolute path>"}.' });
     }
-    const body = (await c.req.json().catch(() => ({}))) as { path?: unknown };
+    const body = (await readJsonBody(c)) as { path?: unknown };
     const path = requireNonEmptyString(body.path, 'path');
     if (!isAbsolute(path)) throw new HTTPException(400, { message: `"path" must be an absolute path; got "${path}".` });
     const mime = FROM_PATH_IMAGE_TYPES[extname(path).toLowerCase()];

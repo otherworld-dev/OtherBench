@@ -12,6 +12,7 @@ import { ChatSendService, type ChatSendDeps } from '../../src/chat-sends/service
 import { collectMessageTree, createAppChat } from '../../src/routes/chats.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
+import { TurnGate } from '../../src/turn-gate.js';
 import { startTurn, type TurnStartDeps } from '../../src/turn-start.js';
 
 /** A ChatEngine driven by hand per message id (as in schedule/service.test.ts), recording every request. */
@@ -81,6 +82,8 @@ export class Harness {
   readonly events: AppEvent[] = [];
   readonly turnDeps: TurnStartDeps;
   readonly waitingNotes = new Set<string>();
+  /** As the container makes it: busy is a reply the event bus has heard start, or a start that holds the chat. */
+  readonly gate = new TurnGate((chatId) => this.bus.runningTurns().some((t) => t.chatId === chatId));
   service!: ChatSendService;
 
   constructor(selfNodeId = 'node-self') {
@@ -88,7 +91,7 @@ export class Harness {
     this.runner = new TurnRunner(this.store, this.engine.engine);
     this.bus.attach(this.runner, this.store);
     this.bus.subscribe((e) => this.events.push(e));
-    this.turnDeps = { store: this.store, turnRunner: this.runner, streamRegistry: new StreamRegistry(this.runner, this.store), events: this.bus };
+    this.turnDeps = { store: this.store, turnRunner: this.runner, streamRegistry: new StreamRegistry(this.runner, this.store), events: this.bus, turnGate: this.gate };
     this.store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
     this.store.profiles.create({
       id: 'p1', name: 'Mock', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {},
@@ -108,10 +111,10 @@ export class Harness {
     return {
       store,
       turnRunner: this.runner,
-      startTurn: (input) => startTurn(this.turnDeps, input),
+      startTurn: (input, claim) => startTurn(this.turnDeps, input, claim),
       resolveProfile: this.resolveP,
       resolveWorkspace: (ws, on) => resolveWorkspace(ws, on ?? store.nodes.self().id, store.locations.allPaths(), () => true),
-      isChatBusy: (chatId) => this.bus.runningTurns().some((t) => t.chatId === chatId),
+      gate: this.gate,
       hasWaitingNotes: (chatId) => this.waitingNotes.has(chatId),
       createAppChat: (app, title, id) => createAppChat({ store }, app, title, id),
       emit: (e) => this.bus.emit(e),

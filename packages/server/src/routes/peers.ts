@@ -7,7 +7,7 @@ import { peerFolderListingOf } from '../peer/location-dirs.js';
 import { namedPeerSchedules } from '../peer/schedules.js';
 import { PeerError, type PeerService } from '../peer/service.js';
 import { PeerVersionError } from '../peer/version.js';
-import { requireNonEmptyString } from '../validation.js';
+import { requireNonEmptyString, readJsonBody } from '../validation.js';
 import { LOCATION_NAME_MAX } from './locations.js';
 
 interface AddBody {
@@ -96,7 +96,7 @@ export function peersRoutes(container: Container): Hono {
     const peers = service(container);
     const nodeId = c.req.param('id') ?? '';
     if (!peers.peer(nodeId)) throw new HTTPException(404, { message: `No paired machine "${nodeId}".` });
-    const body: unknown = opts.body ? await c.req.json().catch(() => ({})) : undefined;
+    const body: unknown = opts.body ? await readJsonBody(c) : undefined;
     try {
       if (opts.syncFirst) await peers.call(nodeId, { method: 'POST', path: '/peer/sync-request' });
       const res = await peers.call(nodeId, { method, path: `/api/schedules${path}`, ...(body !== undefined ? { body } : {}) });
@@ -160,14 +160,14 @@ export function peersRoutes(container: Container): Hono {
 
   /** Enters the code another machine is showing. */
   app.post('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as AddBody;
+    const body = (await readJsonBody(c)) as AddBody;
     const address = requireNonEmptyString(body.address, 'address');
     const code = requireNonEmptyString(body.code, 'code');
     return c.json(await guarded(() => service(container).pairWith(address, code)), 201);
   });
 
   app.patch('/:id', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as PatchBody;
+    const body = (await readJsonBody(c)) as PatchBody;
     const patch: { name?: string; addresses?: string[] } = {};
     if (body.name !== undefined) {
       const name = requireNonEmptyString(body.name, 'name').trim();

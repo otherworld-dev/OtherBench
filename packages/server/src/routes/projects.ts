@@ -5,7 +5,7 @@ import { PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX } f
 import type { Project, Store } from '@otherbench/core/ports/store.js';
 import type { Container } from '../container.js';
 import { releaseBlobs, scheduleBlobShas } from '../schedule/attachments.js';
-import { optionalNullableString } from '../validation.js';
+import { optionalNullableString, readJsonBody } from '../validation.js';
 import { parseFoldersBody, parseWorkspaceBody, projectView, projectViews } from '../workspace-view.js';
 
 interface ProjectBody {
@@ -98,7 +98,7 @@ export function projectsRoutes(container: Container): Hono {
   app.get('/', (c) => c.json(projectViews(container, container.store.projects.list())));
 
   app.post('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as ProjectBody;
+    const body = (await readJsonBody(c)) as ProjectBody;
     // Every field is validated before anything is written.
     const name = requireProjectName(body.name);
     const workspace = parseWorkspaceBody(container, body) ?? null;
@@ -117,7 +117,7 @@ export function projectsRoutes(container: Container): Hono {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     const current = getProjectOrThrow(container, id);
-    const body = (await c.req.json().catch(() => ({}))) as ProjectBody;
+    const body = (await readJsonBody(c)) as ProjectBody;
 
     // Every field is validated before anything is written.
     const patch: Partial<Omit<Project, 'id'>> = {};

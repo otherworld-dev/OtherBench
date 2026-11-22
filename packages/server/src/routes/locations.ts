@@ -4,7 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { adoptIntoLocation, inferLocationMapping, relativeSegments } from '@otherbench/core/domain/workspace.js';
 import type { Location, LocationPath } from '@otherbench/core/types/workspace.js';
 import type { Container } from '../container.js';
-import { optionalWorkspaceRoot, requireNonEmptyString } from '../validation.js';
+import { optionalWorkspaceRoot, requireNonEmptyString, readJsonBody } from '../validation.js';
 
 /** The longest a location or machine name may be, after trimming. */
 export const LOCATION_NAME_MAX = 80;
@@ -92,7 +92,7 @@ export function locationsRoutes(container: Container): Hono {
   app.get('/', (c) => c.json(container.store.locations.list().map((l) => locationView(container, l))));
 
   app.post('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as LocationBody;
+    const body = (await readJsonBody(c)) as LocationBody;
     const name = requireName(body.name, 'A location');
     const path = optionalWorkspaceRoot(body.path, 'path') ?? null;
     assertNameFree(container, name);
@@ -104,7 +104,7 @@ export function locationsRoutes(container: Container): Hono {
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
     getLocationOrThrow(container, id);
-    const body = (await c.req.json().catch(() => ({}))) as LocationBody;
+    const body = (await readJsonBody(c)) as LocationBody;
     let updated = getLocationOrThrow(container, id);
     if (body.name !== undefined) {
       const name = requireName(body.name, 'A location');
@@ -118,7 +118,7 @@ export function locationsRoutes(container: Container): Hono {
   app.put('/:id/path', async (c) => {
     const id = c.req.param('id');
     const location = getLocationOrThrow(container, id);
-    const body = (await c.req.json().catch(() => ({}))) as LocationBody;
+    const body = (await readJsonBody(c)) as LocationBody;
     if (body.path === undefined) throw new HTTPException(400, { message: '"path" is required (null removes it).' });
     const path = optionalWorkspaceRoot(body.path, 'path') ?? null;
     const self = container.store.nodes.self().id;
@@ -135,7 +135,7 @@ export function locationsRoutes(container: Container): Hono {
    * chats and projects on that machine adopting it would move into it.
    */
   app.post('/infer', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as InferBody;
+    const body = (await readJsonBody(c)) as InferBody;
     const nodeId = requireNonEmptyString(body.nodeId, 'nodeId');
     const fromPath = requireNonEmptyString(body.fromPath, 'fromPath');
     const toPath = optionalWorkspaceRoot(body.toPath, 'toPath');
@@ -162,7 +162,7 @@ export function locationsRoutes(container: Container): Hono {
    * resolving there.
    */
   app.post('/adopt', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as AdoptBody;
+    const body = (await readJsonBody(c)) as AdoptBody;
     const nodeId = requireNonEmptyString(body.nodeId, 'nodeId');
     const fromRoot = requireNonEmptyString(body.fromRoot, 'fromRoot');
     const toRoot = optionalWorkspaceRoot(body.toRoot, 'toRoot');
@@ -219,7 +219,7 @@ export function nodeRoutes(container: Container): Hono {
   app.get('/', (c) => c.json(container.store.nodes.self()));
 
   app.patch('/', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as NodeBody;
+    const body = (await readJsonBody(c)) as NodeBody;
     return c.json(container.store.nodes.rename(requireName(body.name, "A machine's")));
   });
 

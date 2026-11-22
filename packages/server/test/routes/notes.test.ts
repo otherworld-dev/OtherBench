@@ -9,6 +9,7 @@ import type { Container } from '../../src/container.js';
 import { NotesService } from '../../src/notes/service.js';
 import { resolveProfile } from '../../src/profile-resolution.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
+import { TurnGate } from '../../src/turn-gate.js';
 import { startTurn } from '../../src/turn-start.js';
 
 /** A ChatEngine whose replies run until the test ends them (as in turns.test.ts). It can't take a note into a reply, so notes wait. */
@@ -109,8 +110,9 @@ beforeEach(() => {
     turnRunner,
     engine: manual.engine,
     streamRegistry,
-    startTurn: (input) => startTurn(container, input),
+    startTurn: (input, claim) => startTurn(container, input, claim),
     resolveProfile: (id) => resolveProfile(container, id),
+    gate: new TurnGate((chatId) => turnRunner.runningIn(chatId).some((id) => store.messages.get(id)?.status === 'streaming')),
   });
   container.notes = notes;
   turnRunner.on((e) => {

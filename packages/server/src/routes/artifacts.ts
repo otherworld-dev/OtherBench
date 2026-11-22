@@ -13,6 +13,7 @@ import type { Container } from '../container.js';
 import { ambiguousOnWindows, chatRoots, OUTSIDE_MESSAGE, viewFailure } from '../view/roots.js';
 import { contentDisposition } from './attachments.js';
 import { collectMessageTree } from './chats.js';
+import { readJsonBody } from '../validation.js';
 
 /** The branch the chat shows (its head extended to the tip, as the thread displays it), and that branch's newest message. */
 export function chatBranch(store: Store, chat: Chat): { onBranch: (messageId: string) => boolean; tip: string | null } {
@@ -131,7 +132,7 @@ export function artifactsRoutes(container: Container): Hono {
   app.put('/chats/:id/artifacts/:artifactId', async (c) => {
     requireJson(c);
     const { chat, artifact } = artifactOrThrow(container, c.req.param('id'), c.req.param('artifactId'));
-    const body = (await c.req.json().catch(() => ({}))) as { content?: unknown; title?: unknown; fromVersionId?: unknown };
+    const body = (await readJsonBody(c)) as { content?: unknown; title?: unknown; fromVersionId?: unknown };
     if (typeof body.content !== 'string') throw new HTTPException(400, { message: '"content" must be text.' });
     if (Buffer.byteLength(body.content, 'utf8') > MAX_ARTIFACT_BYTES) throw new HTTPException(400, { message: 'An artifact version can be at most 1 MB.' });
     // The title goes into the model's system prompt, so the same rule as the tool's: one line.
@@ -162,7 +163,7 @@ export function artifactsRoutes(container: Container): Hono {
   app.post('/chats/:id/artifacts/:artifactId/save', async (c) => {
     requireJson(c);
     const { chat, artifact } = artifactOrThrow(container, c.req.param('id'), c.req.param('artifactId'));
-    const body = (await c.req.json().catch(() => ({}))) as { versionId?: unknown; path?: unknown; replace?: unknown };
+    const body = (await readJsonBody(c)) as { versionId?: unknown; path?: unknown; replace?: unknown };
     const version = typeof body.versionId === 'string' ? store.artifacts.getVersion(body.versionId) : null;
     if (!version || version.artifactId !== artifact.id) throw new HTTPException(404, { message: 'Version not found.' });
     if (typeof body.path !== 'string' || body.path.trim() === '' || body.path.includes('\0')) throw new HTTPException(400, { message: '"path" must be a file path.' });

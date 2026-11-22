@@ -23,6 +23,7 @@ import { chatSendsRoutes } from '../routes/chat-sends.js';
 import { PeerError } from './service.js';
 import { PeerVersionError } from './version.js';
 import { attachmentHandoverRoutes, handOverAttachments } from './attachment-handover.js';
+import { readJsonBody } from '../validation.js';
 
 /**
  * Running a chat on the machine it runs on (v2 plan, Task 52; spec §5).
@@ -1095,7 +1096,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   });
 
   app.post('/approvals/:id/resolve', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as Parameters<typeof parseApprovalChoice>[0];
+    const body = (await readJsonBody(c)) as Parameters<typeof parseApprovalChoice>[0];
     const choice = parseApprovalChoice(body);
     const resolved = container.toolProvider.resolveApproval(c.req.param('id'), choice, c.env.peerNodeId);
     if (!resolved) return c.json({ error: `Approval request "${c.req.param('id')}" is unknown or was already resolved.` }, 404);
@@ -1103,7 +1104,7 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   });
 
   app.post('/asks/:id/answer', async (c) => {
-    const reply = parseAskReply(await c.req.json().catch(() => ({})));
+    const reply = parseAskReply(await readJsonBody(c));
     const result = container.toolProvider.answerAsk(c.req.param('id'), reply);
     if (result === 'unknown') return c.json({ error: `Question or plan "${c.req.param('id')}" is unknown or was already answered.` }, 404);
     if (typeof result === 'object') return c.json({ error: result.invalid }, 400);

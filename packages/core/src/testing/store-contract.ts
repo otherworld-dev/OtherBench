@@ -3,6 +3,10 @@ import type {
   Store,
   Chat,
   App,
+  Artifact,
+  NewArtifactVersion,
+  PushSubscriptionRecord,
+  RemoteSession,
   Project,
   Attachment,
   UsageRecord,
@@ -20,6 +24,7 @@ import type { Connection, ModelInfo, Profile, ToolPolicy } from '../types/config
 import type { CanonMessage, Part } from '../types/messages.js';
 import type { PricingSnapshot } from '../types/usage.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
+import type { MediaWorkflow } from '../domain/media-workflows.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { APP_NOTES_VERSIONS_KEPT } from '../domain/app-notes.js';
 import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
@@ -334,6 +339,48 @@ export function runStoreContract(
       });
       expect(result).toBe('inner');
       expect(store.chats.get('chat-a')).not.toBeNull();
+    });
+
+    it('transaction: a throw inside leaves nothing written, in any repo, and is rethrown', () => {
+      const { profileId } = seedProfile(store, 'profile-a');
+      store.chats.create(makeChatInput({ id: 'chat-kept', profileId, title: 'Before' }));
+      const before = store.messages.create(makeMessageInput({ id: 'm-kept', chatId: 'chat-kept' })).parts;
+      store.jobChats.add('chat-kept', '/jobs/before');
+
+      expect(() =>
+        store.transaction(() => {
+          store.chats.create(makeChatInput({ id: 'chat-new', profileId }));
+          store.messages.create(makeMessageInput({ id: 'm-new', chatId: 'chat-new' }));
+          store.chats.update('chat-kept', { title: 'After' });
+          store.messages.updateParts('m-kept', [{ type: 'text', text: 'changed' }]);
+          store.connections.create(makeConnection({ id: 'conn-new' }));
+          store.jobChats.add('chat-kept', '/jobs/after');
+          store.settings.update({ deckStartCommand: '/start' });
+          throw new Error('half way');
+        })
+      ).toThrow('half way');
+
+      expect(store.chats.get('chat-new')).toBeNull();
+      expect(store.messages.get('m-new')).toBeNull();
+      expect(store.chats.get('chat-kept')!.title).toBe('Before');
+      expect(store.messages.get('m-kept')!.parts).toEqual(before);
+      expect(store.connections.get('conn-new')).toBeNull();
+      expect(store.jobChats.folderFor('chat-kept')).toBe('/jobs/before');
+      expect(store.settings.get().deckStartCommand).toBe(DEFAULT_APP_SETTINGS.deckStartCommand);
+      // And the store still works afterwards.
+      store.chats.create(makeChatInput({ id: 'chat-new', profileId }));
+      expect(store.chats.get('chat-new')).not.toBeNull();
+    });
+
+    it('transaction: a throw in the outer one undoes what a nested one wrote', () => {
+      const { profileId } = seedProfile(store, 'profile-a');
+      expect(() =>
+        store.transaction(() => {
+          store.transaction(() => store.chats.create(makeChatInput({ id: 'chat-inner', profileId })));
+          throw new Error('after the inner one');
+        })
+      ).toThrow('after the inner one');
+      expect(store.chats.get('chat-inner')).toBeNull();
     });
 
     describe('apps', () => {
@@ -2128,6 +2175,437 @@ export function runStoreContract(
         store.schedules.recordPeerChange({ id: 'recent-edit', scheduleId: 's1', scheduleName: 'Report', action: 'edited', fromNode: 'node-laptop', runId: null, at: now - (SCHEDULE_PEER_CHANGE_DAYS_KEPT - 1) * day });
         store.schedules.recordPeerChange({ id: 'now', scheduleId: 's2', scheduleName: 'Other', action: 'paused', fromNode: 'node-laptop', runId: null, at: now });
         expect(store.schedules.peerChanges().map((c) => c.id)).toEqual(['now', 'recent-edit']);
+      });
+    });
+
+    describe('artifacts', () => {
+      const artifact = (over: Partial<Artifact> & { id: string; chatId: string }): Artifact => ({ slug: over.id, kind: 'markdown', language: null, createdAt: 1000, ...over });
+      const version = (over: Partial<NewArtifactVersion> & { id: string; artifactId: string }): NewArtifactVersion => ({
+        title: 'Notes', content: `content of ${over.id}`, madeBy: 'model', messageId: null, parentVersionId: null, createdAt: 2000, ...over,
+      });
+
+      it('create/get round-trip; an unknown id or slug is null', () => {
+        seedChat(store, 'chat-a');
+        const created = store.artifacts.create(artifact({ id: 'art-1', chatId: 'chat-a', slug: 'plan', kind: 'code', language: 'ts' }));
+        expect(created).toEqual({ id: 'art-1', chatId: 'chat-a', slug: 'plan', kind: 'code', language: 'ts', createdAt: 1000 });
+        expect(store.artifacts.get('art-1')).toEqual(created);
+        expect(store.artifacts.bySlug('chat-a', 'plan')).toEqual(created);
+        expect(store.artifacts.get('nope')).toBeNull();
+        expect(store.artifacts.bySlug('chat-a', 'nope')).toBeNull();
+        expect(store.artifacts.bySlug('nope', 'plan')).toBeNull();
+      });
+
+      it('create throws on a duplicate id, and for a chat that does not exist', () => {
+        seedChat(store, 'chat-a');
+        store.artifacts.create(artifact({ id: 'art-1', chatId: 'chat-a' }));
+        expect(() => store.artifacts.create(artifact({ id: 'art-1', chatId: 'chat-a', slug: 'other' }))).toThrow(Error);
+        expect(() => store.artifacts.create(artifact({ id: 'art-2', chatId: 'no-such-chat' }))).toThrow(Error);
+        expect(store.artifacts.get('art-2')).toBeNull();
+      });
+
+      it('a slug belongs to its chat: the same one in two chats names two artifacts', () => {
+        seedChat(store, 'chat-a');
+        seedChat(store, 'chat-b');
+        store.artifacts.create(artifact({ id: 'art-a', chatId: 'chat-a', slug: 'plan' }));
+        store.artifacts.create(artifact({ id: 'art-b', chatId: 'chat-b', slug: 'plan' }));
+        expect(store.artifacts.bySlug('chat-a', 'plan')!.id).toBe('art-a');
+        expect(store.artifacts.bySlug('chat-b', 'plan')!.id).toBe('art-b');
+      });
+
+      it("listByChat is the chat's own, oldest first, ties by id; [] for a chat with none", () => {
+        seedChat(store, 'chat-a');
+        seedChat(store, 'chat-b');
+        store.artifacts.create(artifact({ id: 'art-late', chatId: 'chat-a', createdAt: 3000 }));
+        store.artifacts.create(artifact({ id: 'art-tie-b', chatId: 'chat-a', createdAt: 2000 }));
+        store.artifacts.create(artifact({ id: 'art-tie-a', chatId: 'chat-a', createdAt: 2000 }));
+        store.artifacts.create(artifact({ id: 'art-early', chatId: 'chat-a', createdAt: 1000 }));
+        store.artifacts.create(artifact({ id: 'art-other', chatId: 'chat-b', createdAt: 500 }));
+        expect(store.artifacts.listByChat('chat-a').map((a) => a.id)).toEqual(['art-early', 'art-tie-a', 'art-tie-b', 'art-late']);
+        expect(store.artifacts.listByChat('chat-b').map((a) => a.id)).toEqual(['art-other']);
+        expect(store.artifacts.listByChat('nope')).toEqual([]);
+      });
+
+      it("addVersion numbers versions 1, 2, 3 per artifact and takes the artifact's kind and language unless given", () => {
+        seedChat(store, 'chat-a');
+        store.artifacts.create(artifact({ id: 'art-1', chatId: 'chat-a', kind: 'code', language: 'ts' }));
+        store.artifacts.create(artifact({ id: 'art-2', chatId: 'chat-a', kind: 'markdown' }));
+
+        const v1 = store.artifacts.addVersion(version({ id: 'v1', artifactId: 'art-1', messageId: 'not-a-message-yet' }));
+        expect(v1).toEqual({
+          id: 'v1', artifactId: 'art-1', number: 1, title: 'Notes', content: 'content of v1', kind: 'code', language: 'ts', live: null,
+          madeBy: 'model', messageId: 'not-a-message-yet', parentVersionId: null, createdAt: 2000,
+        });
+        const v2 = store.artifacts.addVersion(version({ id: 'v2', artifactId: 'art-1', kind: 'html', language: null, madeBy: 'user', parentVersionId: 'v1' }));
+        expect(v2).toMatchObject({ number: 2, kind: 'html', language: null, madeBy: 'user', parentVersionId: 'v1' });
+        expect(store.artifacts.addVersion(version({ id: 'v3', artifactId: 'art-1' })).number).toBe(3);
+        // Another artifact starts from 1 again, and the artifact's own kind is unchanged by a version's.
+        expect(store.artifacts.addVersion(version({ id: 'w1', artifactId: 'art-2' }))).toMatchObject({ number: 1, kind: 'markdown', language: null });
+        expect(store.artifacts.get('art-1')!.kind).toBe('code');
+        expect(store.artifacts.getVersion('v1')).toEqual(v1);
+        expect(store.artifacts.getVersion('v2')).toEqual(v2);
+        expect(store.artifacts.getVersion('nope')).toBeNull();
+      });
+
+      it('addVersion throws for an artifact that does not exist, and on a duplicate version id', () => {
+        seedChat(store, 'chat-a');
+        store.artifacts.create(artifact({ id: 'art-1', chatId: 'chat-a' }));
+        expect(() => store.artifacts.addVersion(version({ id: 'v1', artifactId: 'nope' }))).toThrow(Error);
+        store.artifacts.addVersion(version({ id: 'v1', artifactId: 'art-1', content: 'first' }));
+        expect(() => store.artifacts.addVersion(version({ id: 'v1', artifactId: 'art-1', content: 'second' }))).toThrow(Error);
+        expect(store.artifacts.versions('art-1').map((v) => [v.number, v.content])).toEqual([[1, 'first']]);
+      });
+
+      it("a version's live declaration round-trips, and is null when none was given", () => {
+        seedChat(store, 'chat-a');
+        store.artifacts.create(artifact({ id: 'art-1', chatId: 'chat-a', kind: 'html' }));
+        const live = { calls: [{ id: 'cards', tool: 'mcp__deck__list_cards', args: { board: 'Dev', limit: { $param: 'limit' } }, params: { limit: { type: 'integer' as const, minimum: 1, maximum: 50, default: 10 } } }] };
+        store.artifacts.addVersion(version({ id: 'v1', artifactId: 'art-1', live }));
+        store.artifacts.addVersion(version({ id: 'v2', artifactId: 'art-1' }));
+        expect(store.artifacts.getVersion('v1')!.live).toEqual(live);
+        expect(store.artifacts.getVersion('v2')!.live).toBeNull();
+        expect(store.artifacts.versionInfos('art-1').map((v) => v.live)).toEqual([live, null]);
+      });
+
+      it('versions and versionInfos list oldest number first; infos carry everything but the content', () => {
+        seedChat(store, 'chat-a');
+        store.artifacts.create(artifact({ id: 'art-1', chatId: 'chat-a' }));
+        store.artifacts.create(artifact({ id: 'art-2', chatId: 'chat-a' }));
+        // Newer versions made with older clocks (a paired machine's): the number orders them, not the time.
+        store.artifacts.addVersion(version({ id: 'v1', artifactId: 'art-1', createdAt: 3000 }));
+        store.artifacts.addVersion(version({ id: 'w1', artifactId: 'art-2' }));
+        store.artifacts.addVersion(version({ id: 'v2', artifactId: 'art-1', createdAt: 2000 }));
+        store.artifacts.addVersion(version({ id: 'v3', artifactId: 'art-1', createdAt: 1000 }));
+
+        const full = store.artifacts.versions('art-1');
+        expect(full.map((v) => [v.id, v.number, v.content])).toEqual([['v1', 1, 'content of v1'], ['v2', 2, 'content of v2'], ['v3', 3, 'content of v3']]);
+        const infos = store.artifacts.versionInfos('art-1');
+        expect(infos).toEqual(full.map(({ content: _content, ...info }) => info));
+        for (const info of infos) expect(info).not.toHaveProperty('content');
+        expect(store.artifacts.versions('nope')).toEqual([]);
+        expect(store.artifacts.versionInfos('nope')).toEqual([]);
+      });
+
+      it('what it returns is a copy: changing it changes nothing stored', () => {
+        seedChat(store, 'chat-a');
+        store.artifacts.create(artifact({ id: 'art-1', chatId: 'chat-a', slug: 'plan' }));
+        store.artifacts.addVersion(version({ id: 'v1', artifactId: 'art-1', title: 'Before' }));
+        store.artifacts.get('art-1')!.slug = 'changed';
+        store.artifacts.listByChat('chat-a')[0]!.slug = 'changed';
+        store.artifacts.getVersion('v1')!.title = 'changed';
+        store.artifacts.versions('art-1')[0]!.title = 'changed';
+        expect(store.artifacts.get('art-1')!.slug).toBe('plan');
+        expect(store.artifacts.getVersion('v1')!.title).toBe('Before');
+      });
+
+      it("deleting the chat deletes its artifacts and their versions, and leaves another chat's", () => {
+        seedChat(store, 'chat-a');
+        seedChat(store, 'chat-b');
+        store.artifacts.create(artifact({ id: 'art-a', chatId: 'chat-a', slug: 'plan' }));
+        store.artifacts.addVersion(version({ id: 'va', artifactId: 'art-a' }));
+        store.artifacts.create(artifact({ id: 'art-b', chatId: 'chat-b', slug: 'plan' }));
+        store.artifacts.addVersion(version({ id: 'vb', artifactId: 'art-b' }));
+
+        store.chats.delete('chat-a');
+
+        expect(store.artifacts.get('art-a')).toBeNull();
+        expect(store.artifacts.bySlug('chat-a', 'plan')).toBeNull();
+        expect(store.artifacts.listByChat('chat-a')).toEqual([]);
+        expect(store.artifacts.getVersion('va')).toBeNull();
+        expect(store.artifacts.versions('art-a')).toEqual([]);
+        expect(store.artifacts.versionInfos('art-a')).toEqual([]);
+        expect(store.artifacts.get('art-b')).not.toBeNull();
+        expect(store.artifacts.getVersion('vb')).not.toBeNull();
+        // The id and the slug are free again.
+        seedChat(store, 'chat-c');
+        expect(() => store.artifacts.create(artifact({ id: 'art-a', chatId: 'chat-c', slug: 'plan' }))).not.toThrow();
+        expect(store.artifacts.addVersion(version({ id: 'va', artifactId: 'art-a' })).number).toBe(1);
+      });
+    });
+
+    describe('media workflows', () => {
+      const workflow = (over: Partial<MediaWorkflow> & { id: string }): MediaWorkflow => ({
+        name: over.id,
+        media: 'image',
+        graph: { '1': { class_type: 'CLIPTextEncode', inputs: { text: '', clip: ['2', 1] } } },
+        bindings: { prompt: { nodeId: '1', input: 'text' } },
+        builtin: false,
+        ...over,
+      });
+
+      it('create/get round-trip with its graph, bindings and checkpoint; an unknown id is null', () => {
+        const created = store.mediaWorkflows.create(workflow({ id: 'wf-1', name: 'Portrait', media: 'video', checkpoint: 'sdxl.safetensors' }));
+        expect(created).toEqual(workflow({ id: 'wf-1', name: 'Portrait', media: 'video', checkpoint: 'sdxl.safetensors' }));
+        expect(store.mediaWorkflows.get('wf-1')).toEqual(created);
+        expect(store.mediaWorkflows.get('nope')).toBeNull();
+        // No checkpoint chosen reads back as none.
+        store.mediaWorkflows.create(workflow({ id: 'wf-2' }));
+        expect(store.mediaWorkflows.get('wf-2')!.checkpoint).toBeUndefined();
+      });
+
+      it('a stored workflow is never builtin, whatever it was created as', () => {
+        expect(store.mediaWorkflows.create(workflow({ id: 'wf-1', builtin: true })).builtin).toBe(false);
+        expect(store.mediaWorkflows.get('wf-1')!.builtin).toBe(false);
+        expect(store.mediaWorkflows.list()[0]!.builtin).toBe(false);
+      });
+
+      it('create throws on a duplicate id and keeps the first', () => {
+        store.mediaWorkflows.create(workflow({ id: 'wf-1', name: 'First' }));
+        expect(() => store.mediaWorkflows.create(workflow({ id: 'wf-1', name: 'Second' }))).toThrow(Error);
+        expect(store.mediaWorkflows.list().map((w) => w.name)).toEqual(['First']);
+      });
+
+      it('list is every workflow; [] when there are none', () => {
+        expect(store.mediaWorkflows.list()).toEqual([]);
+        store.mediaWorkflows.create(workflow({ id: 'wf-1', name: 'Alpha' }));
+        store.mediaWorkflows.create(workflow({ id: 'wf-2', name: 'Beta' }));
+        expect(store.mediaWorkflows.list().map((w) => w.id)).toEqual(['wf-1', 'wf-2']);
+      });
+
+      it('update changes what the patch names, returns the row, and throws for an unknown id', () => {
+        store.mediaWorkflows.create(workflow({ id: 'wf-1', name: 'Before', checkpoint: 'a.safetensors' }));
+        const updated = store.mediaWorkflows.update('wf-1', { name: 'After', bindings: { prompt: { nodeId: '1', input: 'text' }, seed: { nodeId: '3', input: 'seed' } } });
+        expect(updated).toMatchObject({ id: 'wf-1', name: 'After', media: 'image', checkpoint: 'a.safetensors', builtin: false });
+        expect(updated.bindings).toEqual({ prompt: { nodeId: '1', input: 'text' }, seed: { nodeId: '3', input: 'seed' } });
+        expect(store.mediaWorkflows.get('wf-1')).toEqual(updated);
+        expect(() => store.mediaWorkflows.update('nope', { name: 'x' })).toThrow(Error);
+        expect(store.mediaWorkflows.get('nope')).toBeNull();
+      });
+
+      it('delete removes it; deleting an unknown id does nothing', () => {
+        store.mediaWorkflows.create(workflow({ id: 'wf-1' }));
+        store.mediaWorkflows.create(workflow({ id: 'wf-2' }));
+        store.mediaWorkflows.delete('wf-1');
+        expect(store.mediaWorkflows.get('wf-1')).toBeNull();
+        expect(store.mediaWorkflows.list().map((w) => w.id)).toEqual(['wf-2']);
+        expect(() => store.mediaWorkflows.delete('nope')).not.toThrow();
+      });
+
+      it('what it returns is a copy: changing it changes nothing stored', () => {
+        store.mediaWorkflows.create(workflow({ id: 'wf-1' }));
+        store.mediaWorkflows.get('wf-1')!.graph['1']!.inputs['text'] = 'changed';
+        store.mediaWorkflows.list()[0]!.name = 'changed';
+        expect(store.mediaWorkflows.get('wf-1')).toEqual(workflow({ id: 'wf-1' }));
+      });
+    });
+
+    describe('remote sessions', () => {
+      const session = (over: Partial<RemoteSession> & { id: string }): RemoteSession => ({
+        tokenHash: `hash-of-${over.id}`, createdAt: 1000, lastSeenAt: 1000, expiresAt: 9000, remember: false, epoch: 'epoch-1', address: null, deviceLabel: 'Chrome on Android', ...over,
+      });
+
+      it('insert then get, by id and by token hash; unknown ones are null', () => {
+        const s = session({ id: 's1', remember: true, address: '192.168.1.20' });
+        store.remoteSessions.insert(s);
+        expect(store.remoteSessions.get('s1')).toEqual(s);
+        expect(store.remoteSessions.byTokenHash('hash-of-s1')).toEqual(s);
+        expect(store.remoteSessions.get('nope')).toBeNull();
+        expect(store.remoteSessions.byTokenHash('nope')).toBeNull();
+        // The id is not the token hash.
+        expect(store.remoteSessions.byTokenHash('s1')).toBeNull();
+        store.remoteSessions.insert(session({ id: 's2' }));
+        expect(store.remoteSessions.get('s2')).toMatchObject({ remember: false, address: null });
+      });
+
+      it('insert throws on a duplicate id or a duplicate token hash, and keeps the first', () => {
+        store.remoteSessions.insert(session({ id: 's1', deviceLabel: 'First' }));
+        expect(() => store.remoteSessions.insert(session({ id: 's1', tokenHash: 'another', deviceLabel: 'Second' }))).toThrow(Error);
+        expect(() => store.remoteSessions.insert(session({ id: 's2', tokenHash: 'hash-of-s1', deviceLabel: 'Third' }))).toThrow(Error);
+        expect(store.remoteSessions.count()).toBe(1);
+        expect(store.remoteSessions.byTokenHash('hash-of-s1')!.deviceLabel).toBe('First');
+        expect(store.remoteSessions.get('s2')).toBeNull();
+      });
+
+      it('list is oldest first, ties in the order signed in; count is how many', () => {
+        expect(store.remoteSessions.list()).toEqual([]);
+        expect(store.remoteSessions.count()).toBe(0);
+        store.remoteSessions.insert(session({ id: 's-late', createdAt: 3000 }));
+        store.remoteSessions.insert(session({ id: 's-tie-z', createdAt: 2000 }));
+        store.remoteSessions.insert(session({ id: 's-tie-a', createdAt: 2000 }));
+        store.remoteSessions.insert(session({ id: 's-early', createdAt: 1000 }));
+        expect(store.remoteSessions.list().map((s) => s.id)).toEqual(['s-early', 's-tie-z', 's-tie-a', 's-late']);
+        expect(store.remoteSessions.count()).toBe(4);
+      });
+
+      it('touch moves lastSeenAt and nothing else; an unknown id is left alone', () => {
+        store.remoteSessions.insert(session({ id: 's1' }));
+        store.remoteSessions.touch('s1', 5000);
+        expect(store.remoteSessions.get('s1')).toEqual(session({ id: 's1', lastSeenAt: 5000 }));
+        expect(() => store.remoteSessions.touch('nope', 5000)).not.toThrow();
+        expect(store.remoteSessions.get('nope')).toBeNull();
+        expect(store.remoteSessions.count()).toBe(1);
+      });
+
+      it('delete says whether there was a row, and the token no longer signs in', () => {
+        store.remoteSessions.insert(session({ id: 's1' }));
+        store.remoteSessions.insert(session({ id: 's2' }));
+        expect(store.remoteSessions.delete('s1')).toBe(true);
+        expect(store.remoteSessions.delete('s1')).toBe(false);
+        expect(store.remoteSessions.delete('nope')).toBe(false);
+        expect(store.remoteSessions.get('s1')).toBeNull();
+        expect(store.remoteSessions.byTokenHash('hash-of-s1')).toBeNull();
+        expect(store.remoteSessions.list().map((s) => s.id)).toEqual(['s2']);
+        // Its id and token hash are free again.
+        expect(() => store.remoteSessions.insert(session({ id: 's1' }))).not.toThrow();
+      });
+
+      it('what it returns is a copy: changing it changes nothing stored', () => {
+        const given = session({ id: 's1' });
+        store.remoteSessions.insert(given);
+        given.deviceLabel = 'changed';
+        store.remoteSessions.get('s1')!.deviceLabel = 'changed';
+        store.remoteSessions.byTokenHash('hash-of-s1')!.deviceLabel = 'changed';
+        store.remoteSessions.list()[0]!.deviceLabel = 'changed';
+        expect(store.remoteSessions.get('s1')!.deviceLabel).toBe('Chrome on Android');
+      });
+    });
+
+    describe('push subscriptions', () => {
+      const session = (id: string, createdAt = 1000): RemoteSession => ({
+        id, tokenHash: `hash-of-${id}`, createdAt, lastSeenAt: createdAt, expiresAt: 9000, remember: false, epoch: 'epoch-1', address: null, deviceLabel: 'Chrome on Android',
+      });
+      const subscription = (over: Partial<PushSubscriptionRecord> & { sessionId: string }): PushSubscriptionRecord => ({
+        endpoint: `https://push.example/${over.sessionId}`, p256dh: 'key', auth: 'secret', prefs: { approvals: true, replies: false, scheduled: true }, createdAt: 2000, updatedAt: 2000, ...over,
+      });
+
+      it('put then bySession; a session with none is null', () => {
+        store.remoteSessions.insert(session('s1'));
+        const sub = subscription({ sessionId: 's1' });
+        store.pushSubscriptions.put(sub);
+        expect(store.pushSubscriptions.bySession('s1')).toEqual(sub);
+        expect(store.pushSubscriptions.bySession('nope')).toBeNull();
+        expect(store.pushSubscriptions.list()).toEqual([sub]);
+      });
+
+      it('put throws for a session that does not exist, and stores nothing', () => {
+        expect(() => store.pushSubscriptions.put(subscription({ sessionId: 'nope' }))).toThrow(Error);
+        expect(store.pushSubscriptions.list()).toEqual([]);
+      });
+
+      it("a second put for the session replaces its endpoint, keys and prefs, and keeps when it first subscribed", () => {
+        store.remoteSessions.insert(session('s1'));
+        store.pushSubscriptions.put(subscription({ sessionId: 's1' }));
+        store.pushSubscriptions.put(subscription({
+          sessionId: 's1', endpoint: 'https://push.example/renewed', p256dh: 'key-2', auth: 'secret-2', prefs: { approvals: false, replies: true, scheduled: false }, createdAt: 7000, updatedAt: 7000,
+        }));
+        expect(store.pushSubscriptions.list()).toHaveLength(1);
+        expect(store.pushSubscriptions.bySession('s1')).toEqual({
+          sessionId: 's1', endpoint: 'https://push.example/renewed', p256dh: 'key-2', auth: 'secret-2', prefs: { approvals: false, replies: true, scheduled: false }, createdAt: 2000, updatedAt: 7000,
+        });
+      });
+
+      it('an endpoint held by another session moves to the one that puts it', () => {
+        store.remoteSessions.insert(session('s1'));
+        store.remoteSessions.insert(session('s2'));
+        store.pushSubscriptions.put(subscription({ sessionId: 's1', endpoint: 'https://push.example/shared' }));
+        store.pushSubscriptions.put(subscription({ sessionId: 's2', endpoint: 'https://push.example/shared' }));
+        expect(store.pushSubscriptions.bySession('s1')).toBeNull();
+        expect(store.pushSubscriptions.bySession('s2')!.endpoint).toBe('https://push.example/shared');
+        expect(store.pushSubscriptions.list().map((s) => s.sessionId)).toEqual(['s2']);
+      });
+
+      it('list is oldest first, ties in the order subscribed', () => {
+        for (const id of ['s1', 's2', 's3', 's4']) store.remoteSessions.insert(session(id));
+        store.pushSubscriptions.put(subscription({ sessionId: 's1', createdAt: 3000 }));
+        store.pushSubscriptions.put(subscription({ sessionId: 's4', createdAt: 2000 }));
+        store.pushSubscriptions.put(subscription({ sessionId: 's2', createdAt: 2000 }));
+        store.pushSubscriptions.put(subscription({ sessionId: 's3', createdAt: 1000 }));
+        expect(store.pushSubscriptions.list().map((s) => s.sessionId)).toEqual(['s3', 's4', 's2', 's1']);
+      });
+
+      it('deleteBySession and deleteByEndpoint say whether there was a row', () => {
+        store.remoteSessions.insert(session('s1'));
+        store.remoteSessions.insert(session('s2'));
+        store.pushSubscriptions.put(subscription({ sessionId: 's1' }));
+        store.pushSubscriptions.put(subscription({ sessionId: 's2' }));
+        expect(store.pushSubscriptions.deleteBySession('s1')).toBe(true);
+        expect(store.pushSubscriptions.deleteBySession('s1')).toBe(false);
+        expect(store.pushSubscriptions.deleteBySession('nope')).toBe(false);
+        expect(store.pushSubscriptions.deleteByEndpoint('https://push.example/s2')).toBe(true);
+        expect(store.pushSubscriptions.deleteByEndpoint('https://push.example/s2')).toBe(false);
+        expect(store.pushSubscriptions.list()).toEqual([]);
+        // The sessions themselves are untouched.
+        expect(store.remoteSessions.count()).toBe(2);
+      });
+
+      it("signing a session out deletes its subscription, and leaves another session's", () => {
+        store.remoteSessions.insert(session('s1'));
+        store.remoteSessions.insert(session('s2'));
+        store.pushSubscriptions.put(subscription({ sessionId: 's1' }));
+        store.pushSubscriptions.put(subscription({ sessionId: 's2' }));
+        store.remoteSessions.delete('s1');
+        expect(store.pushSubscriptions.bySession('s1')).toBeNull();
+        expect(store.pushSubscriptions.list().map((s) => s.sessionId)).toEqual(['s2']);
+      });
+
+      it('what it returns is a copy: changing it changes nothing stored', () => {
+        store.remoteSessions.insert(session('s1'));
+        const given = subscription({ sessionId: 's1' });
+        store.pushSubscriptions.put(given);
+        given.prefs.replies = true;
+        store.pushSubscriptions.bySession('s1')!.prefs.replies = true;
+        store.pushSubscriptions.list()[0]!.prefs.replies = true;
+        expect(store.pushSubscriptions.bySession('s1')!.prefs).toEqual({ approvals: true, replies: false, scheduled: true });
+      });
+    });
+
+    describe('job chats', () => {
+      it('a chat that was never added has no folder and no app knowledge', () => {
+        seedChat(store, 'chat-a');
+        expect(store.jobChats.folderFor('chat-a')).toBeNull();
+        expect(store.jobChats.appContextFor('chat-a')).toBe(false);
+        expect(store.jobChats.folderFor('nope')).toBeNull();
+        expect(store.jobChats.appContextFor('nope')).toBe(false);
+      });
+
+      it("add holds the chat to its folder, without its app's knowledge unless asked", () => {
+        seedChat(store, 'chat-a');
+        seedChat(store, 'chat-b');
+        seedChat(store, 'chat-c');
+        store.jobChats.add('chat-a', 'E:\\Jobs\\a');
+        store.jobChats.add('chat-b', '/jobs/b', { appContext: true });
+        store.jobChats.add('chat-c', '/jobs/c', { appContext: false });
+        expect(store.jobChats.folderFor('chat-a')).toBe('E:\\Jobs\\a');
+        expect(store.jobChats.appContextFor('chat-a')).toBe(false);
+        expect(store.jobChats.folderFor('chat-b')).toBe('/jobs/b');
+        expect(store.jobChats.appContextFor('chat-b')).toBe(true);
+        expect(store.jobChats.appContextFor('chat-c')).toBe(false);
+      });
+
+      it("a job chat held to no folder ('') is still a job chat, not an ordinary one", () => {
+        seedChat(store, 'chat-a');
+        store.jobChats.add('chat-a', '');
+        expect(store.jobChats.folderFor('chat-a')).toBe('');
+      });
+
+      it('adding a chat again replaces its folder and its app knowledge', () => {
+        seedChat(store, 'chat-a');
+        store.jobChats.add('chat-a', '/jobs/first', { appContext: true });
+        store.jobChats.add('chat-a', '/jobs/second');
+        expect(store.jobChats.folderFor('chat-a')).toBe('/jobs/second');
+        expect(store.jobChats.appContextFor('chat-a')).toBe(false);
+      });
+
+      it('remove makes it an ordinary chat again; removing one that was never added does nothing', () => {
+        seedChat(store, 'chat-a');
+        seedChat(store, 'chat-b');
+        store.jobChats.add('chat-a', '/jobs/a', { appContext: true });
+        store.jobChats.add('chat-b', '/jobs/b');
+        store.jobChats.remove('chat-a');
+        expect(store.jobChats.folderFor('chat-a')).toBeNull();
+        expect(store.jobChats.appContextFor('chat-a')).toBe(false);
+        expect(store.jobChats.folderFor('chat-b')).toBe('/jobs/b');
+        expect(() => store.jobChats.remove('nope')).not.toThrow();
+      });
+
+      it("a job chat's row outlives its chat: a chat made again under the same id is still held to the folder", () => {
+        // The table has no foreign key to the chat (migration 051): the row stays until it is removed.
+        seedChat(store, 'chat-a');
+        store.jobChats.add('chat-a', '/jobs/a');
+        store.chats.delete('chat-a');
+        expect(store.jobChats.folderFor('chat-a')).toBe('/jobs/a');
+        // And a chat need not exist yet to be marked: the mark is made before the chat's first turn.
+        store.jobChats.add('chat-later', '/jobs/later');
+        expect(store.jobChats.folderFor('chat-later')).toBe('/jobs/later');
       });
     });
 
