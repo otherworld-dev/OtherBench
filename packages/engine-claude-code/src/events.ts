@@ -7,7 +7,11 @@ import type { HelperRegistry } from './helpers.js';
 export type MappedEvent =
   | EngineEvent
   | { type: 'init'; sessionId: string; tools: string[]; mcpServers: { name: string; status: string }[]; permissionMode: string | null }
-  | { type: 'result-error'; text: string }
+  /**
+   * A turn's failed result. `status` is the HTTP status the SDK gave for a failed API call, and `apiError` its own
+   * error type from the reply's last assistant message (`SDKAssistantMessageError`): each present only when the SDK said.
+   */
+  | { type: 'result-error'; text: string; status?: number; apiError?: string }
   | { type: 'rate-limited'; resetsAt: number | null }
   /** Claude Code swapped the conversation for a summary: on /compact (manual) or by itself near the context limit (auto). */
   | { type: 'compacted'; trigger: 'manual' | 'auto'; preTokens: number; postTokens: number | null }
@@ -130,6 +134,8 @@ export interface SdkEventMapperOptions {
 export class SdkEventMapper {
   private readonly toolNames = new Map<string, string>();
   private sawDelta = false;
+  /** The SDK's error type on the reply's latest own assistant message, kept for the result that follows. */
+  private apiError: string | null = null;
   private readonly renames: ReadonlyMap<string, string>;
   /** Helpers started and not finished yet, and those running in the background. */
   private readonly openHelpers = new Set<string>();
@@ -284,6 +290,7 @@ export class SdkEventMapper {
           }
         }
         if (isMain) this.sawDelta = false;
+        if (isMain) this.apiError = typeof m['error'] === 'string' ? m['error'] : null;
         // Claude Code's own limit message ("You've hit your limit"): the account is limited, with no reset time given.
         if (m['error'] === 'rate_limit') out.push({ type: 'rate-limited', resetsAt: null });
         return out;
@@ -347,7 +354,10 @@ export class SdkEventMapper {
     if (m['subtype'] !== 'success' || m['is_error'] === true) {
       const errors = (m['errors'] as string[] | undefined) ?? [];
       const text = errors.join('\n') || String(m['result'] ?? m['subtype'] ?? 'Claude Code reported an error.');
-      return [{ type: 'result-error', text }];
+      const status = m['api_error_status'];
+      const apiError = this.apiError;
+      this.apiError = null;
+      return [{ type: 'result-error', text, ...(typeof status === 'number' ? { status } : {}), ...(apiError !== null ? { apiError } : {}) }];
     }
     const u = (m['usage'] ?? {}) as Record<string, unknown>;
     const cached = num(u['cache_read_input_tokens']);

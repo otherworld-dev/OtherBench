@@ -68,7 +68,7 @@ export async function* utility(deps: ClaudeCodeEngineDeps, req: EngineRequest): 
       for (const event of mapper.map(msg)) {
         if (event.type === 'text-delta' || event.type === 'finish') yield event;
         if (event.type === 'finish') prompt.close();
-        if (event.type === 'result-error') { prompt.close(); yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: model }) }; return; }
+        if (event.type === 'result-error') { prompt.close(); yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: model, apiStatus: event.status, apiError: event.apiError }) }; return; }
       }
     }
   } catch (err) {
