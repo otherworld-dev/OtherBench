@@ -347,9 +347,12 @@ export function appsRoutes(container: Container): Hono {
     // Spec "Calls I made": an app chat's folder is the app's folder, so a new folder moves every chat in the app,
     // through the chat repo so the change syncs (and the evented repo announces each chat-updated). A Claude Code
     // chat whose folder changed starts a fresh session on its next turn (engine-claude-code session.ts compares cwd).
+    // A job chat keeps its job folder: it is held to it, and moved it would fail every turn (docs/features/jobs.md).
     if (workspace !== undefined && !sameFolder(current.workspace, updated.workspace)) {
       for (const chat of container.store.chats.list()) {
-        if (chat.appId === id && !sameFolder(chat.workspace, updated.workspace)) container.store.chats.update(chat.id, { workspace: updated.workspace });
+        if (chat.appId !== id || sameFolder(chat.workspace, updated.workspace)) continue;
+        if (container.store.jobChats.folderFor(chat.id) !== null) continue;
+        container.store.chats.update(chat.id, { workspace: updated.workspace });
       }
     }
     return c.json(appView(container, updated));

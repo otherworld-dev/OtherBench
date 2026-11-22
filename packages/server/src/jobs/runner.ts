@@ -35,8 +35,11 @@ export interface JobReply {
  * in its folder only. Commands it runs in the sandbox have their network fixed here, never by the caller's say.
  */
 export interface JobRunner {
-  /** Makes a job chat held to `folder`, on this machine, never in Auto. */
-  createChat(input: { title: string; folder: string; profileId: string }): { chatId: string };
+  /**
+   * Makes a job chat held to `folder`, on this machine, never in Auto. With `appId` it is in that app, so the Code tab
+   * lists it there; it still runs in `folder`, and its prompt gets nothing of the app's (TurnRunner).
+   */
+  createChat(input: { title: string; folder: string; profileId: string; appId?: string | null }): { chatId: string };
   /** The profile jobs would run on (`null` = the app default), or null when there is none. */
   profile(profileId: string | null): Promise<{ id: string; name: string; archived: boolean } | null>;
   /** Starts an unattended turn from the chat's current tip. */
@@ -111,9 +114,10 @@ export function createJobRunner(d: JobRunnerDeps): JobRunner {
   }
 
   return {
-    createChat({ title, folder, profileId }) {
+    createChat({ title, folder, profileId, appId = null }) {
       const problem = jobFolderProblem(folder, (d.homeDir ?? homedir)());
       if (problem !== null) throw new Error(problem);
+      if (appId !== null && !d.store.apps.get(appId)) throw new Error(`There is no app "${appId}" on this machine.`);
       const chat = d.store.chats.create({
         id: randomUUID(),
         title,
@@ -123,7 +127,7 @@ export function createJobRunner(d: JobRunnerDeps): JobRunner {
         pinned: false,
         archivedAt: null,
         projectId: null,
-        appId: null,
+        appId,
         autoMode: false,
         // The brief is untrusted, so nothing from it reaches a memory note (memory also skips job chats itself).
         memoryExcluded: true,

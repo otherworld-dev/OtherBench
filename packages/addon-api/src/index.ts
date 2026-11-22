@@ -50,7 +50,8 @@ export interface JobReply {
  * only, whatever the add-on does; commands run here have their network fixed by OtherBench.
  */
 export interface AddonJobRunner {
-  createChat(input: { title: string; folder: string; profileId: string }): { chatId: string };
+  /** With `appId` (an id from `apps()`), the chat is in that app, so the Code tab lists it there; it still runs in `folder`. */
+  createChat(input: { title: string; folder: string; profileId: string; appId?: string | null }): { chatId: string };
   profile(profileId: string | null): Promise<{ id: string; name: string; archived: boolean } | null>;
   startTurn(input: { chatId: string; text: string; profileId: string }): Promise<{ userMessageId: string; messageId: string }>;
   onReplyEnded(cb: (messageId: string, status: MessageStatus) => void): () => void;

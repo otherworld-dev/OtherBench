@@ -116,6 +116,22 @@ describe('TurnRunner in a job chat', () => {
     errors.mockRestore();
   });
 
+  it("keeps the app's notes and its linked project's instructions and memory out of a job chat in an app", async () => {
+    const store = new InMemoryStore();
+    store.projects.create({ id: 'proj', name: 'Shop', workspaceRoot: null, defaultProfileId: null, instructions: 'PROJECT-INSTRUCTIONS' });
+    store.projectMemory.save('proj', 'PROJECT-MEMORY', 'user', null);
+    store.apps.create({ id: 'app-1', name: 'Shop', linkedProjectId: 'proj' });
+    store.appNotes.save('app-1', '## Gotchas\n- APP-NOTE', null, 1);
+    jobChat(store, jobDir, { appId: 'app-1', projectId: null });
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { jobFolderFor: () => jobDir });
+    await runner.run({ chatId: 'job-chat', parentId: null, userParts: [{ type: 'text', text: 'go' }], profiles: [wideProfile()] });
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    const req = engine.requests[0]!;
+    const sent = JSON.stringify([req.profile.systemPrompt, req.messages]);
+    for (const secret of ['APP-NOTE', 'PROJECT-INSTRUCTIONS', 'PROJECT-MEMORY']) expect(sent).not.toContain(secret);
+  });
+
   it('leaves every other chat alone', async () => {
     const store = new InMemoryStore();
     jobChat(store, jobDir);

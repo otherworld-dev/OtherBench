@@ -52,6 +52,17 @@ describe('JobRunner', () => {
     expect(chat!.memoryExcluded).toBe(true);
   });
 
+  it("createChat puts the chat in the app it names, so the Code tab lists it there, and refuses an app that isn't here", () => {
+    const { store, runner } = setup();
+    store.apps.create({ id: 'app-1', name: 'Shop' });
+    const { chatId } = runner.createChat({ title: 'Job', folder: FOLDER, profileId: 'p1', appId: 'app-1' });
+    // Still in the job's own folder, not the app's, and still a job chat.
+    expect(store.chats.get(chatId)).toMatchObject({ appId: 'app-1', projectId: null, workspace: { kind: 'machine', root: FOLDER } });
+    expect(store.jobChats.folderFor(chatId)).toBe(FOLDER);
+    expect(() => runner.createChat({ title: 'Job', folder: FOLDER, profileId: 'p1', appId: 'gone' })).toThrow(/app/);
+    expect(store.chats.list()).toHaveLength(1);
+  });
+
   it("createChat refuses a folder that isn't a job's clone: relative, missing, without a plain .git, or the home folder or one above it", () => {
     const { store, runner } = setup();
     const noGit = join(ROOT, 'no-git');
