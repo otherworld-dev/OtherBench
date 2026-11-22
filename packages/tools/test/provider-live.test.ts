@@ -303,6 +303,8 @@ describe('OtherBenchToolProvider live calls', () => {
 
   it("the artifact tool refuses a mutating tool at creation and takes a read-only one", async () => {
     const artifact = (await provider.listTools(policy())).find((t) => t.name === 'artifact')!;
+    // An artifact needs its chat, in the fake store as in the database.
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspace: null, pinned: false, archivedAt: null });
     const ctx: ToolContext = { chatId: 'chat-1', messageId: 'msg-1', profileId: 'profile-1', workspaceRoot: null, signal: new AbortController().signal };
     const create = (calls: LiveCall[], id: string) => artifact.execute({ command: 'create', id, kind: 'html', title: 'Dash', content: '', live: JSON.stringify({ calls }) }, ctx);
     expect(await create([setCall], 'one')).toMatchObject({ error: true, code: 'not_read_only' });
