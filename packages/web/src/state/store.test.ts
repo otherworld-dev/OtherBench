@@ -245,6 +245,15 @@ describe('useOtherBenchStore', () => {
     expect(useOtherBenchStore.getState().messages['m2']?.parts).toEqual([{ type: 'text', text: 'full-from-hello' }]);
   });
 
+  it("a reconnect's hello keeps a finished reply's handover link", () => {
+    const link = { type: 'handover', direction: 'to', chatId: 'c2', title: 'Fresh chat' } as const;
+    useOtherBenchStore.getState().loadMessages('c1', [{ ...stubAssistant('m1'), status: 'complete', parts: [{ type: 'text', text: 'Summary' }, link] }], null);
+    useOtherBenchStore.getState().applyHello([
+      { messageId: 'm1', status: 'complete', events: [{ messageId: 'm1', type: 'text-delta', text: 'Summary' }, { messageId: 'm1', type: 'status', status: 'complete' }] },
+    ]);
+    expect(useOtherBenchStore.getState().messages['m1']?.parts).toEqual([{ type: 'text', text: 'Summary' }, link]);
+  });
+
   it('applyHello on a known message also updates its authoritative status', () => {
     useOtherBenchStore.getState().registerMessage(stubAssistant('m1'));
     useOtherBenchStore.getState().applyHello([{ messageId: 'm1', status: 'complete', events: [] }]);

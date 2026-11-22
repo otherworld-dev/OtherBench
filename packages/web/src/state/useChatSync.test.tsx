@@ -6,14 +6,16 @@ import type { ReplyNote } from '@otherbench/core/types/notes.js';
 
 const streams = vi.hoisted(() => [] as { url: string; closed: boolean }[]);
 const hellos = vi.hoisted(() => [] as ((hello: unknown) => void)[]);
+const statuses = vi.hoisted(() => [] as ((status: 'idle' | 'connecting' | 'open' | 'reconnecting') => void)[]);
 
 vi.mock('./sse.js', () => ({
   SseClient: class {
     private readonly stream: { url: string; closed: boolean };
-    constructor(opts: { url: string; onHello: (hello: unknown) => void }) {
+    constructor(opts: { url: string; onHello: (hello: unknown) => void; onStatusChange: (status: 'idle' | 'connecting' | 'open' | 'reconnecting') => void }) {
       this.stream = { url: opts.url, closed: false };
       streams.push(this.stream);
       hellos.push(opts.onHello);
+      statuses.push(opts.onStatusChange);
     }
     connect(): void {}
     close(): void {
@@ -48,6 +50,9 @@ describe('useChatSync', () => {
     useOtherBenchStore.setState(useOtherBenchStore.getInitialState(), true);
     streams.length = 0;
     hellos.length = 0;
+    statuses.length = 0;
+    vi.mocked(api.chats.messages).mockReset();
+    vi.mocked(api.chats.messages).mockImplementation(async () => ({ messages: [], headMessageId: null, usage: {} }));
   });
   // Unmounting lets go of each chat the hook followed, which the message pool keeps while followed.
   afterEach(cleanup);
@@ -115,5 +120,46 @@ describe('useChatSync', () => {
 
     await waitFor(() => expect(useOtherBenchStore.getState().returnedNotes.map((n) => n.id)).toEqual(['lost']));
     expect(useOtherBenchStore.getState().sentNotes).toEqual({});
+  });
+
+  it("keeps why a chat's messages didn't load, and loads them again when its stream comes back", async () => {
+    const message: CanonMessage = { id: 'm1', chatId: 'c1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null, createdAt: 1 };
+    const fetchMessages = vi.mocked(api.chats.messages);
+    const failed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    fetchMessages.mockRejectedValueOnce(new Error('server unreachable'));
+    useOtherBenchStore.setState({ chats: [chat('c1', { headMessageId: 'm1' })] });
+    renderHook(() => useChatSync('c1'));
+    await waitFor(() => expect(useOtherBenchStore.getState().chatLoadErrors).toEqual({ c1: 'server unreachable' }));
+    expect(fetchMessages).toHaveBeenCalledTimes(1);
+
+    // Dropping doesn't load; coming back does.
+    act(() => statuses[0]!('reconnecting'));
+    expect(fetchMessages).toHaveBeenCalledTimes(1);
+    fetchMessages.mockResolvedValueOnce({ messages: [message], headMessageId: 'm1', usage: {} });
+    act(() => statuses[0]!('open'));
+    await waitFor(() => expect(useOtherBenchStore.getState().messages.m1).toEqual(message));
+    expect(useOtherBenchStore.getState().chatLoadErrors).toEqual({});
+
+    // A stream that opens with nothing wrong loads nothing more.
+    act(() => statuses[0]!('open'));
+    expect(fetchMessages).toHaveBeenCalledTimes(2);
+    failed.mockRestore();
+  });
+
+  it('loads a chat again when asked to (Retry in the thread)', async () => {
+    const fetchMessages = vi.mocked(api.chats.messages);
+    const failed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    fetchMessages.mockRejectedValue(new Error('server unreachable'));
+    useOtherBenchStore.setState({ chats: [chat('c1', { headMessageId: 'm1' })] });
+    renderHook(() => useChatSync('c1'));
+    await waitFor(() => expect(useOtherBenchStore.getState().chatLoadErrors.c1).toBe('server unreachable'));
+
+    fetchMessages.mockRejectedValue(new Error('still down'));
+    act(() => useOtherBenchStore.getState().retryChatLoad('c1'));
+    // Cleared while it tries, so the thread shows it opening again.
+    expect(useOtherBenchStore.getState().chatLoadErrors).toEqual({});
+    await waitFor(() => expect(useOtherBenchStore.getState().chatLoadErrors.c1).toBe('still down'));
+    expect(fetchMessages).toHaveBeenCalledTimes(2);
+    failed.mockRestore();
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { Overlay } from '../components/Overlay.js';
 import type { UsageRollup } from '@otherbench/core/domain/usage-rollup.js';
 import type { ModelInfo } from '@otherbench/core/types/config.js';
 import { api } from '../state/api.js';
@@ -175,7 +176,7 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
   }
 
   return (
-    <div data-testid="usage-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
+    <Overlay label="Usage & pricing" testId="usage-view" onEscape={onClose}>
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
         <div className="flex items-center gap-4">
           <h2 className="label-caps text-base">Usage &amp; pricing</h2>
@@ -338,6 +339,6 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
             </div>
           ))}
       </div>
-    </div>
+    </Overlay>
   );
 }

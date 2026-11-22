@@ -28,7 +28,11 @@ function markRead(n: GithubNotification): void {
  */
 export function openNotification(n: GithubNotification, appId: string | null): void {
   if (n.kind === 'issue' && n.number !== null && appId !== null) openIssue(appId, n.number, 'open');
-  else openInBrowser(n.url).catch((err: unknown) => console.error(`[otherbench-web] failed to open ${n.url}:`, err));
+  else
+    openInBrowser(n.url).catch((err: unknown) => {
+      console.error(`[otherbench-web] failed to open ${n.url}:`, err);
+      toast({ text: "Couldn't open that in the browser.", tone: 'error' });
+    });
   markRead(n);
 }
 

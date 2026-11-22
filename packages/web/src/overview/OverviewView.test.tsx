@@ -260,6 +260,23 @@ describe('OverviewView tick-off', () => {
     expect(openIssue).not.toHaveBeenCalled();
   });
 
+  it("says so when a chat couldn't be archived, and when a refresh failed", async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    useToasts.setState({ toasts: [] });
+    vi.mocked(api.chats.patch).mockRejectedValue(new Error('HTTP 500'));
+    vi.mocked(api.overview.refresh).mockRejectedValue(new Error('HTTP 500'));
+    show(overview([tile('chats', { chats, notifications: null, deck: null })]));
+    render(<OverviewView />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Archive One' }));
+    });
+    expect(useToasts.getState().toasts.at(-1)).toMatchObject({ text: "Couldn't archive One.", tone: 'error' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('overview-refresh'));
+    });
+    expect(useToasts.getState().toasts.at(-1)).toMatchObject({ text: "Couldn't refresh the Overview.", tone: 'error' });
+  });
+
   it('Done that GitHub refuses puts the row back and says so', async () => {
     vi.mocked(api.overview.markDone).mockRejectedValue(new Error('HTTP 500'));
     vi.spyOn(console, 'error').mockImplementation(() => {});

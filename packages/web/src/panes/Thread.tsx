@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
 import { flushSync } from 'react-dom';
 import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@otherbench/core/domain/tree.js';
 import { contextLineOf } from '@otherbench/core/domain/context-lines.js';
-import type { ApprovalChoice, AskReply } from '@otherbench/core/ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { GitBar } from '../code/GitBar.js';
 import { Composer } from '../components/Composer.js';
+import { ErrorBoundary } from '../components/ErrorBoundary.js';
 import { FindBar } from '../components/FindBar.js';
 import { Gwyn } from '../components/Gwyn.js';
 import { ComputerBanner } from '../components/ComputerBanner.js';
@@ -20,9 +21,12 @@ import { FactCards } from '../components/AppNoteCards.js';
 import { WaitingNotes } from '../components/WaitingNotes.js';
 import { api, ApiError } from '../state/api.js';
 import { escapeStopsReply } from '../lib/escapeStopsReply.js';
+import { toast } from '../lib/toasts.js';
 import { findMatches, firstMatchFrom, isFindShortcut, isMacPlatform, messageFindText, stepMatch, type FindMatch } from '../lib/chatFind.js';
 import { findRoots, locateMatch, showFindHighlight } from '../lib/findInDom.js';
 import { clampWindow, windowFor, type DrawnWindow } from '../lib/threadWindow.js';
+import { useChatExtras, useChatMessages } from '../state/chatMessages.js';
+import type { MessageExtras } from '../state/reducer.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useStopReply } from '../state/useStopReply.js';
@@ -74,6 +78,137 @@ function drawnMessage(scroller: HTMLElement | null, messageId: string): HTMLElem
 }
 
 /**
+ * The other half of the approval round trip whose request arrives over
+ * SSE (state/store.ts's `applyTurnEvent`, folded by reducer.ts into
+ * `extras[messageId].pendingApprovals`): sends the human's choice to the
+ * server, which both records/executes it AND streams back the matching
+ * `approval-resolved` event that removes this prompt from state -- so
+ * there is nothing to do here on success beyond letting that arrive;
+ * `ApprovalPrompt` itself handles a failed request by re-enabling its
+ * buttons (this just needs to let the rejection propagate back to it).
+ * Outside the component (it reads nothing of it), so every message is handed the same function.
+ */
+async function resolveApproval(requestId: string, choice: ApprovalChoice): Promise<void> {
+  try {
+    await api.approvals.resolve(requestId, choice);
+  } catch (err) {
+    // 404: the server no longer knows this request (its turn ended, was
+    // cancelled or the server restarted). Retrying can never work, so drop
+    // the dead card instead of leaving it up with a retry error.
+    if (err instanceof ApiError && err.status === 404) {
+      useOtherBenchStore.getState().dropApproval(requestId);
+      return;
+    }
+    throw err;
+  }
+}
+
+/** Answers a question or plan card; a 404 (already settled, turn ended, server restarted) drops the dead card. */
+async function answerAsk(askId: string, reply: AskReply): Promise<void> {
+  try {
+    await api.asks.answer(askId, reply);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      useOtherBenchStore.getState().dropAsk(askId);
+      return;
+    }
+    throw err;
+  }
+}
+
+const NO_APPROVALS: ApprovalRequest[] = [];
+const NO_ASKS: UserAsk[] = [];
+
+/** What a message's buttons do, by message id: the same functions for the life of the thread, so a message is drawn again only when it changes. */
+interface ThreadMessageActions {
+  reopenVariants(parentId: string | null): void;
+  selectBranch(messageId: string, delta: -1 | 1): void;
+  regenerate(messageId: string): void;
+  edit(messageId: string): void;
+  saveEdit(messageId: string, parts: Part[]): void;
+  cancelEdit(): void;
+}
+
+interface ThreadMessageProps {
+  message: CanonMessage;
+  extras: MessageExtras | undefined;
+  showAllText: boolean;
+  offerHandover: boolean;
+  /** The other variants of a resolved compare turn; 0 when there are none. */
+  otherVariantsCount: number;
+  /** Where the message stands among its branches; a total under 2 means no switcher. */
+  branchIndex: number;
+  branchTotal: number;
+  /** Regenerate, Edit, the branch arrows and the editor's Save wait: a reply is streaming, or an edit is being sent. */
+  actionsDisabled: boolean;
+  canRegenerate: boolean;
+  /** The inline editor is open on this message, and what it says about who answers. */
+  editing: boolean;
+  editProfileName: string | undefined;
+  editCompareNote: boolean;
+  actions: ThreadMessageActions;
+}
+
+/**
+ * One message of the thread. Thread is drawn again for every chunk of its chat's reply; this takes only values
+ * that stay the same for a message that hasn't changed (and `actions`, the same for all), so the chunk draws the
+ * reply being written and none of the messages above it. The closures `Message` wants are made here, per message.
+ */
+const ThreadMessage = memo(function ThreadMessage({
+  message,
+  extras,
+  showAllText,
+  offerHandover,
+  otherVariantsCount,
+  branchIndex,
+  branchTotal,
+  actionsDisabled,
+  canRegenerate,
+  editing,
+  editProfileName,
+  editCompareNote,
+  actions,
+}: ThreadMessageProps): JSX.Element {
+  const { id, parentId } = message;
+  const branch = useMemo(
+    () => (branchTotal > 1 ? { index: branchIndex, total: branchTotal, onSelect: (delta: -1 | 1) => actions.selectBranch(id, delta), disabled: actionsDisabled } : undefined),
+    [branchIndex, branchTotal, actionsDisabled, actions, id]
+  );
+  const editState = useMemo(
+    () =>
+      editing
+        ? { onSave: (parts: Part[]) => actions.saveEdit(id, parts), onCancel: actions.cancelEdit, busy: actionsDisabled, profileName: editProfileName, compareNote: editCompareNote }
+        : undefined,
+    [editing, actionsDisabled, editProfileName, editCompareNote, actions, id]
+  );
+  const onReopenVariants = useCallback(() => actions.reopenVariants(parentId), [actions, parentId]);
+  const onRegenerate = useCallback(() => actions.regenerate(id), [actions, id]);
+  const onEdit = useCallback(() => actions.edit(id), [actions, id]);
+  return (
+    <Message
+      message={message}
+      framed
+      showAllText={showAllText}
+      offerHandover={offerHandover}
+      otherVariantsCount={otherVariantsCount}
+      onReopenVariants={otherVariantsCount > 0 ? onReopenVariants : undefined}
+      pendingApprovals={extras?.pendingApprovals ?? NO_APPROVALS}
+      onResolveApproval={resolveApproval}
+      pendingAsks={extras?.pendingAsks ?? NO_ASKS}
+      onAnswerAsk={answerAsk}
+      {...(extras?.progressByCall ? { progressByCall: extras.progressByCall } : {})}
+      {...(extras?.thinkingSince !== undefined ? { thinkingSince: extras.thinkingSince } : {})}
+      {...(extras?.thinkingTokens !== undefined ? { thinkingTokens: extras.thinkingTokens } : {})}
+      branch={branch}
+      actionsDisabled={actionsDisabled}
+      onRegenerate={canRegenerate ? onRegenerate : undefined}
+      onEdit={message.role === 'user' ? onEdit : undefined}
+      editing={editState}
+    />
+  );
+});
+
+/**
  * Centre pane: the active branch (head -> root), extended forward through
  * any run of single-child replies, plus the composer. An unresolved compare
  * turn (more than one child at the effective tail, none kept yet) renders as
@@ -97,11 +232,13 @@ function drawnMessage(scroller: HTMLElement | null, messageId: string): HTMLElem
  * messages as compare variants of each other. Scoping to this chat's own
  * messages before any tree computation is what keeps them chat-local (task
  * 19/20 CRITICAL fix) -- every tree call below runs against `chatMessages`,
- * never the raw `messages` map.
+ * never the raw `messages` map. It also keeps another chat's stream from
+ * drawing this one: the pool is replaced on every chunk of every chat, so
+ * the thread subscribes to its own chat's share (state/chatMessages.ts).
  */
 export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
-  const messages = useOtherBenchStore((s) => s.messages);
-  const extras = useOtherBenchStore((s) => s.extras);
+  const chatMessages = useChatMessages(chat?.id ?? null);
+  const extras = useChatExtras(chat?.id ?? null);
   const models = useOtherBenchStore((s) => s.models);
   const setHeadMessageId = useOtherBenchStore((s) => s.setHeadMessageId);
   const markKept = useOtherBenchStore((s) => s.markKept);
@@ -110,6 +247,9 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   // The chat's running replies, for Escape (the section's onKeyDown) as well as the composer's Stop.
   const replies = useStopReply(chat?.id ?? null);
   const resetMessageForRetry = useOtherBenchStore((s) => s.resetMessageForRetry);
+  // Why this chat's messages didn't load (useChatSync), shown only while there is nothing to draw.
+  const loadError = useOtherBenchStore((s) => (chat ? (s.chatLoadErrors[chat.id] ?? null) : null));
+  const retryChatLoad = useOtherBenchStore((s) => s.retryChatLoad);
   const viewer = useViewerStore((s) => viewerFor(s.viewers, chat?.id ?? ''));
   const setViewerOpen = useViewerStore((s) => s.setOpen);
   const setViewerShare = useViewerStore((s) => s.setShare);
@@ -131,10 +271,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   // user message beside the variants.
   const [shownVariantId, setShownVariantId] = useState<string | null>(null);
 
-  const chatMessages = useMemo(
-    () => (chatId ? Object.values(messages).filter((m) => m.chatId === chatId) : []),
-    [messages, chatId]
-  );
+  const messageById = useMemo(() => new Map(chatMessages.map((m) => [m.id, m])), [chatMessages]);
   useBrowserAutoOpen(chatId, chatMessages, viewer.open);
   // The viewer bar's Browser button: shown once the model has used the browser in this chat.
   const browserUsed = useMemo(() => chatMessages.some((m) => m.parts.some((p) => p.type === 'tool-call' && p.name === 'browser')), [chatMessages]);
@@ -216,7 +353,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const keepPlaceRef = useRef<{ id: string; y: number } | null>(null);
   const drawEarlier = (): void => {
     const first = displayPath[start];
-    const el = first ? document.getElementById(`msg-${first.id}`) : null;
+    const el = first ? drawnMessage(scrollRef.current, first.id) : null;
     keepPlaceRef.current = first && el ? { id: first.id, y: el.getBoundingClientRect().top } : null;
     setDrawnFrom({ chatId, start: Math.max(0, start - THREAD_WINDOW), end });
   };
@@ -236,7 +373,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     const el = scrollRef.current;
     const before = keepPlaceRef.current;
     keepPlaceRef.current = null;
-    const kept = before ? document.getElementById(`msg-${before.id}`) : null;
+    const kept = before ? drawnMessage(el, before.id) : null;
     if (!el || !before || !kept) return;
     el.scrollTop += kept.getBoundingClientRect().top - before.y;
   }, [start]);
@@ -248,7 +385,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     flushSync(() => {
       if (at !== -1) drawTo(at);
     });
-    document.getElementById(`msg-${messageId}`)?.scrollIntoView({ block: 'start' });
+    drawnMessage(scrollRef.current, messageId)?.scrollIntoView({ block: 'start' });
     if (endRef.current !== null) {
       nearBottomRef.current = false;
       setShowJump(true);
@@ -408,15 +545,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }, [pinned, accounts.length, loadAccounts]);
   const tint = pinned && pinned !== 'main' ? (accounts.find((a) => a.slug === pinned)?.colour ?? 'var(--accent)') : null;
 
-  if (!chat) {
-    return (
-      <section aria-label="No chat open" className="flex h-full w-full flex-1 flex-col items-center justify-center gap-4 text-sm text-[var(--text-faint)]">
-        <Gwyn mood="peek" className="h-28 w-28" />
-        Select a chat, or start a new one, to begin.
-      </section>
-    );
-  }
-
+  // The handlers below are only ever run from a drawn chat's buttons, so `chat` is set in them (`chat!`). They sit
+  // above the no-chat return because the effect after them keeps the latest of each for the messages' buttons.
   /** Moves the head to `messageId`, optimistically, rolling back (with a message) if the server refuses. */
   async function moveHead(messageId: string, failure: string): Promise<boolean> {
     const previousHeadId = chat!.headMessageId;
@@ -501,7 +631,11 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       // Same head rule as Composer: head lands on the new USER message and the
       // thread walks into its lone reply.
       setHeadMessageId(chat!.id, result.userMessageId);
-      void api.turns.setHead(chat!.id, result.userMessageId).catch((err: unknown) => console.error('[otherbench-web] failed to persist head:', err));
+      void api.turns.setHead(chat!.id, result.userMessageId).catch((err: unknown) => {
+        console.error('[otherbench-web] failed to persist head:', err);
+        // The edit is sent and on show; only the server's note of which branch is current is behind.
+        toast({ text: "Sent, but couldn't save which branch the chat is on. It may open on the earlier one next time.", tone: 'error', chatId: chat!.id });
+      });
       setEditingId(null);
     } catch (err) {
       console.error('[otherbench-web] failed to send edited message:', err);
@@ -518,55 +652,25 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     await moveHead(messageId, "Couldn't keep that variant -- the server rejected the change, so it was reverted. Please try again.");
   }
 
-  /**
-   * The other half of the approval round trip whose request arrives over
-   * SSE (state/store.ts's `applyTurnEvent`, folded by reducer.ts into
-   * `extras[messageId].pendingApprovals`): sends the human's choice to the
-   * server, which both records/executes it AND streams back the matching
-   * `approval-resolved` event that removes this prompt from state -- so
-   * there is nothing to do here on success beyond letting that arrive;
-   * `ApprovalPrompt` itself handles a failed request by re-enabling its
-   * buttons (this just needs to let the rejection propagate back to it).
-   */
-  async function resolveApproval(requestId: string, choice: ApprovalChoice): Promise<void> {
-    try {
-      await api.approvals.resolve(requestId, choice);
-    } catch (err) {
-      // 404: the server no longer knows this request (its turn ended, was
-      // cancelled or the server restarted). Retrying can never work, so drop
-      // the dead card instead of leaving it up with a retry error.
-      if (err instanceof ApiError && err.status === 404) {
-        useOtherBenchStore.getState().dropApproval(requestId);
-        return;
-      }
-      throw err;
-    }
-  }
-
-  /** Answers a question or plan card; a 404 (already settled, turn ended, server restarted) drops the dead card. */
-  async function answerAsk(askId: string, reply: AskReply): Promise<void> {
-    try {
-      await api.asks.answer(askId, reply);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        useOtherBenchStore.getState().dropAsk(askId);
-        return;
-      }
-      throw err;
-    }
-  }
-
   async function retryVariant(variant: CanonMessage): Promise<void> {
     setRetryingIds((s) => new Set(s).add(variant.id));
     // Optimistic, local-only: clears the failed attempt's parts/error so the
     // retried stream's deltas build on a clean slate rather than appending
     // onto stale content -- mirrors what the server does to the same row
     // (TurnRunner.retry).
+    setSwitchError(null);
+    const before = useOtherBenchStore.getState();
+    const previous = before.messages[variant.id];
+    const previousExtras = before.extras[variant.id];
     resetMessageForRetry(variant.id);
+    const cleared = useOtherBenchStore.getState().messages[variant.id];
     try {
       await api.turns.retry(variant.id);
     } catch (err) {
       console.error(`[otherbench-web] failed to retry ${variant.id}:`, err);
+      // No retry started, so nothing will fill the cleared reply: it goes back as it was, with its Retry.
+      if (previous && cleared) useOtherBenchStore.getState().restoreMessageAfterRetry(cleared, previous, previousExtras);
+      setSwitchError(`Couldn't retry that reply: ${err instanceof Error && err.message ? err.message : 'please try again'}`);
     } finally {
       setRetryingIds((s) => {
         const next = new Set(s);
@@ -574,6 +678,52 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
         return next;
       });
     }
+  }
+
+  // What the messages' buttons do, as functions that never change (ThreadMessage): each looks its message up
+  // and hands on to this render's handlers, kept current here as the scroll handler's window is above.
+  const latestActionsRef = useRef<Pick<ThreadMessageActions, 'selectBranch' | 'regenerate' | 'saveEdit'> | null>(null);
+  useLayoutEffect(() => {
+    latestActionsRef.current = {
+      selectBranch: (messageId, delta) => {
+        let siblings: CanonMessage[];
+        try {
+          siblings = siblingsOf(chatMessages, messageId);
+        } catch {
+          return; // gone since it was drawn
+        }
+        const target = siblings[siblings.findIndex((x) => x.id === messageId) + delta];
+        if (target) selectBranch(target, siblings);
+      },
+      regenerate: (messageId) => {
+        const reply = messageById.get(messageId);
+        if (reply) void regenerate(reply);
+      },
+      saveEdit: (messageId, parts) => {
+        const original = messageById.get(messageId);
+        if (original) void saveEdit(original, parts);
+      },
+    };
+  });
+  const messageActions = useMemo<ThreadMessageActions>(
+    () => ({
+      reopenVariants: setReopenedParentId,
+      selectBranch: (messageId, delta) => latestActionsRef.current?.selectBranch(messageId, delta),
+      regenerate: (messageId) => latestActionsRef.current?.regenerate(messageId),
+      edit: setEditingId,
+      saveEdit: (messageId, parts) => latestActionsRef.current?.saveEdit(messageId, parts),
+      cancelEdit: () => setEditingId(null),
+    }),
+    []
+  );
+
+  if (!chat) {
+    return (
+      <section aria-label="No chat open" className="flex h-full w-full flex-1 flex-col items-center justify-center gap-4 text-sm text-[var(--text-faint)]">
+        <Gwyn mood="peek" className="h-28 w-28" />
+        Select a chat, or start a new one, to begin.
+      </section>
+    );
   }
 
   const share = draftShare ?? viewer.share;
@@ -623,7 +773,16 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
             )}
             <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
               <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
-                {displayPath.length === 0 && chat.headMessageId !== null ? (
+                {displayPath.length === 0 && chat.headMessageId !== null && loadError !== null ? (
+                  // The messages didn't load: said, with a way to try again, rather than "Opening the chat…" for ever.
+                  <div role="alert" className="flex flex-col items-center gap-3 pt-16 text-sm text-[var(--text-muted)]">
+                    <span className="text-[var(--danger)]">Couldn't open this chat.</span>
+                    <span className="max-w-full break-words text-xs text-[var(--text-faint)]">{loadError}</span>
+                    <button type="button" onClick={() => retryChatLoad(chat.id)} className="btn px-3 py-1 text-xs">
+                      Retry
+                    </button>
+                  </div>
+                ) : displayPath.length === 0 && chat.headMessageId !== null ? (
                   // The chat has messages, they just haven't arrived: Gwyn waits with you, held back a moment so a quick load never flashes him.
                   <div role="status" className="gwyn-appear flex flex-col items-center gap-3 pt-16 text-sm text-[var(--text-faint)]" style={{ '--gwyn-delay': '300ms' } as CSSProperties}>
                     <Gwyn mood="loading" className="h-24 w-24" />
@@ -670,54 +829,25 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                       );
                     }
                     return (
-                      <Message
-                        key={m.id}
+                      // One message that can't be drawn (a part from a newer paired machine) takes out only itself.
+                      <ErrorBoundary key={m.id} what="this message" variant="inline" raw={m}>
+                      <ThreadMessage
                         message={m}
-                        framed
+                        extras={extras[m.id]}
                         showAllText={m.id === unfoldId}
                         offerHandover={!compare && m.id === displayPath[displayPath.length - 1]?.id}
                         otherVariantsCount={compare ? siblings.length - 1 : 0}
-                        onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
-                        pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
-                        onResolveApproval={resolveApproval}
-                        pendingAsks={extras[m.id]?.pendingAsks ?? []}
-                        onAnswerAsk={answerAsk}
-                        {...(extras[m.id]?.progressByCall ? { progressByCall: extras[m.id]?.progressByCall } : {})}
-                        {...(extras[m.id]?.thinkingSince !== undefined ? { thinkingSince: extras[m.id]?.thinkingSince } : {})}
-                        {...(extras[m.id]?.thinkingTokens !== undefined ? { thinkingTokens: extras[m.id]?.thinkingTokens } : {})}
-                        branch={
-                          !compare && siblings.length > 1
-                            ? {
-                                index: siblings.findIndex((x) => x.id === m.id),
-                                total: siblings.length,
-                                onSelect: (delta) => {
-                                  const target = siblings[siblings.findIndex((x) => x.id === m.id) + delta];
-                                  if (target) selectBranch(target, siblings);
-                                },
-                                disabled: chatStreaming || editBusy,
-                              }
-                            : undefined
-                        }
+                        branchIndex={compare ? 0 : siblings.findIndex((x) => x.id === m.id)}
+                        branchTotal={compare ? 0 : siblings.length}
                         actionsDisabled={chatStreaming || editBusy}
-                        onRegenerate={
-                          // A compact's reply can't be redone in place (the server refuses it): /compact is sent again instead.
-                          m.role === 'assistant' && m.parentId !== null && !compare && contextLineOf(messages[m.parentId] ?? m)?.kind !== 'compact'
-                            ? () => void regenerate(m)
-                            : undefined
-                        }
-                        onEdit={m.role === 'user' ? () => setEditingId(m.id) : undefined}
-                        editing={
-                          editingId === m.id
-                            ? {
-                                onSave: (parts) => void saveEdit(m, parts),
-                                onCancel: () => setEditingId(null),
-                                busy: editBusy || chatStreaming,
-                                profileName: editProfile(m)?.name,
-                                compareNote: isCompareSet(childrenOf(chatMessages, m.id)),
-                              }
-                            : undefined
-                        }
+                        // A compact's reply can't be redone in place (the server refuses it): /compact is sent again instead.
+                        canRegenerate={m.role === 'assistant' && m.parentId !== null && !compare && contextLineOf(messageById.get(m.parentId) ?? m)?.kind !== 'compact'}
+                        editing={editingId === m.id}
+                        editProfileName={editingId === m.id ? editProfile(m)?.name : undefined}
+                        editCompareNote={editingId === m.id && isCompareSet(childrenOf(chatMessages, m.id))}
+                        actions={messageActions}
                       />
+                      </ErrorBoundary>
                     );
                   })}
                   {end !== null && (

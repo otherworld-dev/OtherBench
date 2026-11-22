@@ -7,6 +7,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { THREAD_WINDOW, Thread } from './Thread.js';
 import { useClaudeAccounts } from '../state/claudeAccounts.js';
 import { useViewerStore, viewerFor } from '../viewer/state.js';
+import { useToasts } from '../lib/toasts.js';
 
 vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: ({ browserUsed }: { browserUsed?: boolean }) => <aside aria-label="Viewer" data-browser-used={String(browserUsed)} /> }));
 
@@ -227,6 +228,49 @@ describe('Thread', () => {
     expect(screen.queryByTestId('gwyn')).toBeNull();
   });
 
+  it("says so when an opened chat's messages didn't load, with a Retry that loads them again", async () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'u1' })], messages: {}, chatLoadErrors: { 'chat-1': 'server unreachable' } });
+    render(<ThreadForChat chatId="chat-1" />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't open this chat.");
+    expect(alert).toHaveTextContent('server unreachable');
+    expect(screen.queryByText('Opening the chat…')).toBeNull();
+
+    await userEvent.setup().click(within(alert).getByRole('button', { name: 'Retry' }));
+    // Asked to load again (useChatSync does it), and back to opening meanwhile.
+    expect(useOtherBenchStore.getState().chatReloads['chat-1']).toBe(1);
+    expect(useOtherBenchStore.getState().chatLoadErrors).toEqual({});
+    expect(screen.getByText('Opening the chat…')).toBeInTheDocument();
+  });
+
+  it("keeps showing a chat's messages when a later reload of them fails", () => {
+    useOtherBenchStore.setState({ chats: [makeChat({ headMessageId: 'u1' })], messages: { u1: makeMessage('u1', 'chat-1') }, chatLoadErrors: { 'chat-1': 'server unreachable' } });
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(within(screen.getByTestId('thread-scroll')).getByText('text of u1')).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't open this chat.")).toBeNull();
+  });
+
+  it("a message that can't be drawn takes out only itself, and offers its raw content", async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // A part shape this build doesn't know how to draw (text that isn't text), as a newer paired machine might send.
+    const odd = variantMessage('odd', 'u1', { parts: [{ type: 'text', text: { not: 'a string' } as unknown as string }] });
+    useOtherBenchStore.setState({
+      chats: [makeChat({ headMessageId: 'u2' })],
+      messages: { u1: makeMessage('u1', 'chat-1'), odd, u2: makeMessage('u2', 'chat-1', { parentId: 'odd' }) },
+    });
+    render(<ThreadForChat chatId="chat-1" />);
+    const thread = within(screen.getByTestId('thread-scroll'));
+    expect(thread.getByText('text of u1')).toBeInTheDocument();
+    expect(thread.getByText('text of u2')).toBeInTheDocument();
+    const alert = thread.getByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't show this message.");
+    await userEvent.setup().click(within(alert).getByRole('button', { name: 'Show raw content' }));
+    expect(alert).toHaveTextContent('"not": "a string"');
+    // The message box is still there to carry on with.
+    expect(screen.getByRole('textbox', { name: /message/i })).toBeInTheDocument();
+    logged.mockRestore();
+  });
+
   it('has Gwyn wave in a chat with no messages yet', () => {
     useOtherBenchStore.setState({ chats: [makeChat()] });
     render(<ThreadForChat chatId="chat-1" />);
@@ -405,6 +449,34 @@ describe('Thread', () => {
     // The sibling is completely unaffected.
     expect(useOtherBenchStore.getState().messages['healthy']?.parts).toEqual([{ type: 'text', text: 'still going' }]);
   });
+
+  it('a Retry the server refuses puts the failed reply back as it was and says why', async () => {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const failing = variantMessage('failing', 'root', {
+      createdAt: 1,
+      status: 'error',
+      error: { kind: 'rate_limit', message: 'boom', retryable: true },
+      parts: [{ type: 'text', text: 'partial before failing' }],
+    });
+    const other = variantMessage('other', 'root', { createdAt: 2 });
+    useOtherBenchStore.getState().loadMessages('chat-1', [root, failing, other], null);
+    const usage = { tokensIn: 3, tokensOut: 4, tokensCached: 0, tokensReasoning: 0 };
+    useOtherBenchStore.setState({ extras: { failing: { usage, pendingApprovals: [] } } });
+    const failed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockedRetry.mockRejectedValue(new Error('the server is restarting'));
+
+    const user = userEvent.setup();
+    render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
+    await user.click(screen.getByTestId('variant-tab-failing'));
+    await user.click(screen.getByRole('button', { name: /retry profile failing/i }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent("Couldn't retry that reply: the server is restarting"));
+    // Not left blank and "streaming" for ever: the reply, its error and its extras are back, and Retry is offered again.
+    expect(useOtherBenchStore.getState().messages['failing']).toEqual(failing);
+    expect(useOtherBenchStore.getState().extras['failing']).toEqual({ usage, pendingApprovals: [] });
+    expect(screen.getByRole('button', { name: /retry profile failing/i })).toBeEnabled();
+    failed.mockRestore();
+  });
 });
 
 describe('Thread auto-scroll', () => {
@@ -535,6 +607,19 @@ describe('Thread auto-scroll', () => {
       await user.click(screen.getByRole('textbox', { name: /message/i }));
       await user.keyboard('{Escape}');
       expect(vi.mocked(api.chats.stop)).toHaveBeenCalledWith('chat-1');
+    });
+
+    it("says so when the reply couldn't be stopped", async () => {
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      vi.mocked(api.chats.stop).mockRejectedValueOnce(new Error('HTTP 500'));
+      useToasts.setState({ toasts: [] });
+      streamingReply();
+      const user = userEvent.setup();
+      render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+      await user.click(screen.getByRole('textbox', { name: /message/i }));
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(useToasts.getState().toasts.at(-1)).toMatchObject({ text: "Couldn't stop the reply. Please try again.", tone: 'error' }));
+      logged.mockRestore();
     });
 
     it('from the conversation', () => {
@@ -956,6 +1041,27 @@ describe('Thread regenerate, edit and branch switching', () => {
     expect(screen.queryByRole('textbox', { name: 'Edit message' })).not.toBeInTheDocument();
   });
 
+  it("says so when an edit was sent but the chat's place couldn't be saved", async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    useToasts.setState({ toasts: [] });
+    seedProfile();
+    load(usr('u1', null, 1, 'first'), asst('a1', 'u1', 2));
+    useOtherBenchStore.getState().setChats([makeChat({ headMessageId: 'a1' })]);
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1b', assistantMessageIds: ['a1b'] });
+    mockedSetHead.mockRejectedValue(new Error('HTTP 500'));
+    render(<ThreadForChat chatId="chat-1" />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.type(screen.getByRole('textbox', { name: 'Edit message' }), ' again');
+    await user.click(screen.getByRole('button', { name: 'Save and send' }));
+    await waitFor(() =>
+      expect(useToasts.getState().toasts.at(-1)).toMatchObject({ text: "Sent, but couldn't save which branch the chat is on. It may open on the earlier one next time.", tone: 'error', chatId: 'chat-1' })
+    );
+    // The edit itself went through and stays on show.
+    expect(useOtherBenchStore.getState().chats[0]?.headMessageId).toBe('u1b');
+    logged.mockRestore();
+  });
+
   it('Cancel closes the editor without sending anything', async () => {
     seedProfile();
     load(usr('u1', null, 1), asst('a1', 'u1', 2));
@@ -1302,6 +1408,63 @@ describe('Thread in a long chat', () => {
     expect(drawn()).toContain('m2');
     expect(scrollIntoView).toHaveBeenCalled();
     expect(scrollIntoView.mock.contexts.at(-1)).toBe(document.getElementById('msg-m2'));
+  });
+
+  // Nothing stops two panes holding one chat (a saved layout isn't checked for it), and each draws every message
+  // under the same element id: a thread must find its own copy, not the first in the page.
+  describe('with the same chat in another pane', () => {
+    const twoPanes = (): { a: HTMLElement; b: HTMLElement } => {
+      longChat(100);
+      render(
+        <>
+          <div data-testid="pane-a">
+            <ThreadForChat chatId="chat-1" />
+          </div>
+          <div data-testid="pane-b">
+            <ThreadForChat chatId="chat-1" />
+          </div>
+        </>
+      );
+      return { a: screen.getByTestId('pane-a'), b: screen.getByTestId('pane-b') };
+    };
+    const drawnIn = (scroller: HTMLElement): string[] => Array.from(scroller.querySelectorAll('[id^="msg-"]')).map((el) => el.id.slice(4));
+
+    it('goes to a prompt picked in the outline in its own pane', async () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      const { a, b } = twoPanes();
+      const user = userEvent.setup();
+      // The outline remembers being open (an earlier test may have left it so).
+      const show = within(b).queryByRole('button', { name: 'Show conversation outline' });
+      if (show) await user.click(show);
+      // Drawn in both panes already.
+      await user.click(within(b).getByTestId('outline-m98'));
+      const own = within(b).getByTestId('thread-scroll').querySelector('[id="msg-m98"]');
+      expect(own).not.toBeNull();
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(own);
+      expect(scrollIntoView.mock.contexts).not.toContain(within(a).getByTestId('thread-scroll').querySelector('[id="msg-m98"]'));
+    });
+
+    it('keeps its own place when earlier messages are drawn', async () => {
+      const { a, b } = twoPanes();
+      const scroller = within(b).getByTestId('thread-scroll');
+      const other = within(a).getByTestId('thread-scroll');
+      Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: 150 });
+      // jsdom has no layout: in this pane 100px a message, stacked from the top; the other pane's sit still.
+      const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const top = this.id.startsWith('msg-') && scroller.contains(this) ? drawnIn(scroller).indexOf(this.id.slice(4)) * 100 - scroller.scrollTop : 0;
+        return { top, bottom: top + 100, left: 0, right: 0, width: 0, height: 100, x: 0, y: top, toJSON: () => ({}) };
+      });
+      try {
+        await userEvent.setup().click(within(b).getByRole('button', { name: `Show earlier messages (${100 - THREAD_WINDOW} more)` }));
+        expect(drawnIn(scroller)).toHaveLength(THREAD_WINDOW * 2);
+        expect(drawnIn(other)).toHaveLength(THREAD_WINDOW);
+        // Pushed down by the forty drawn above it, and moved by as much.
+        expect(scroller.scrollTop).toBe(150 + THREAD_WINDOW * 100);
+      } finally {
+        rect.mockRestore();
+      }
+    });
   });
 });
 
