@@ -88,6 +88,10 @@ export class RemoteRuns {
     };
   }
 
+  isWatched(id: string): boolean {
+    return this.watched.has(id);
+  }
+
   /** The replies `nodeId` is taken to be writing that no open relay is following, each with its chat. */
   unwatched(nodeId: string): { id: string; chatId: string }[] {
     return [...this.messages].filter(([id, m]) => m.nodeId === nodeId && !this.watched.has(id)).map(([id, m]) => ({ id, chatId: m.chatId }));
@@ -595,14 +599,30 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
     void eachRecord(response, async (_raw, event, data) => {
       if (!open) return;
       if (event === 'hello') {
+        // Its hello is the replies it is writing in the chat, and those that ended in the last minute (the
+        // registry's `snapshot`), never the chat's history.
         const hello = data as { inFlight?: { messageId: string; status: string; events?: Record<string, unknown>[] }[]; backgroundApprovals?: { id?: unknown }[] };
+        const ended: { messageId: string; status: string }[] = [];
         for (const b of hello.inFlight ?? []) {
-          if (TERMINAL.has(b.status)) continue;
+          if (TERMINAL.has(b.status)) {
+            // One this machine still takes to be running there ended with no relay open to hear it. Taken now,
+            // before any wait, so it is ended here once (settleRemoteRuns may be about to do the same).
+            if (runs.messageNode(b.messageId) === nodeId && !runs.isWatched(b.messageId)) {
+              runs.finished(b.messageId);
+              ended.push(b);
+            }
+            continue;
+          }
           inFlight.add(b.messageId);
           seen.set(b.messageId, (Array.isArray(b.events) ? b.events : []).reduce(withEvent, []));
         }
         runs.noteMessages(nodeId, chatId, [...inFlight]);
         watch(inFlight);
+        if (ended.length > 0) {
+          // As a reply that ends while the relay is open: its row is here before anything here hears it ended.
+          await container.peers?.syncerOrNull()?.pullFrom(nodeId).catch(() => 0);
+          for (const b of ended) container.events?.emit({ type: 'turn-finished', chatId, messageId: b.messageId, status: b.status as 'complete' });
+        }
         // Cards a background helper raised there before this machine was watching: answered there too.
         for (const request of Array.isArray(hello.backgroundApprovals) ? hello.backgroundApprovals : []) {
           if (isString(request?.id)) runs.noteApproval(request.id, nodeId);

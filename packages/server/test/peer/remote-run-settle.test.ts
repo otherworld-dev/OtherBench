@@ -209,3 +209,37 @@ describe("a relay that fails on this machine's side", () => {
     }
   });
 });
+
+describe("a relay opened after a reply ended on the other machine", () => {
+  it("ends the reply here from that machine's hello, once", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    // An earlier reply in the chat, for the next to follow.
+    const first = await send(pc, chatId, profileId, 'hello');
+    await expect.poll(() => pc.container.store.messages.get(first)?.status).toBe('complete');
+    await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
+
+    // The PC's word of what it is running doesn't get through (as when its announcement is missed), so only a
+    // relay can end the next reply here.
+    laptop.container.peers!.activeChats = () => [chatId];
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: first, parts: [{ type: 'text', text: 'and again' }], profileIds: [profileId] });
+    expect(res.status).toBe(202);
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('complete');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(laptop.container.events!.runningTurns().map((t) => t.messageId)).toEqual([replyId]);
+
+    // A window opens the chat: the PC's hello says the reply has ended.
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const reader = stream.body!.getReader();
+    const { value } = await reader.read();
+    const hello = JSON.parse(/^data: (.*)$/m.exec(new TextDecoder().decode(value))![1]!) as { inFlight: { messageId: string; status: string; events: { type: string }[] }[] };
+    expect(hello.inFlight.find((b) => b.messageId === replyId)).toMatchObject({ status: 'complete' });
+    await expect.poll(() => finishes(laptop, replyId).length, { timeout: 5000 }).toBe(1);
+    expect(finishes(laptop, replyId)[0]).toMatchObject({ chatId, status: 'complete' });
+    expect(laptop.container.events!.runningTurns()).toEqual([]);
+    expect(laptop.container.store.messages.get(replyId)).toMatchObject({ status: 'complete' });
+    await reader.cancel();
+    await new Promise((r) => setTimeout(r, 200));
+    expect(finishes(laptop, replyId)).toHaveLength(1);
+  });
+});
