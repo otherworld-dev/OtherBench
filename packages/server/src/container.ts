@@ -53,7 +53,7 @@ import { AppNotesService } from './app-notes/service.js';
 import { createPeerApp } from './peer/app.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
-import { chatIsIdle, forwardedApi, PeerInfluence, peerComputerOffReason, RemoteRuns } from './peer/forward.js';
+import { chatIsIdle, forwardedApi, PeerInfluence, peerComputerOffReason, RemoteRuns, settleRemoteRunsOnPeerEvents } from './peer/forward.js';
 import { handleBackground } from './background.js';
 import { closeEngineChatsThatAreGone, followChatSettings } from './engine-chats.js';
 import { PeerService } from './peer/service.js';
@@ -952,6 +952,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     console.error('[otherbench-server] could not start the peer listener; paired machines cannot reach this one:', err);
   }
   forwarded = forwardedApi(container);
+  // A reply a paired machine was writing for this one ends here even with no window showing its chat.
+  if (container.remoteRuns) settleRemoteRunsOnPeerEvents(container, container.remoteRuns);
   peers.startMonitoring();
   syncer.start();
   // The Overview: checks GitHub and Deck now and every 15 minutes, once paired machines are being watched (their
