@@ -346,6 +346,21 @@ describe('apps CRUD', () => {
     expect(updated.sort()).toEqual(['c1', 'c2']);
   });
 
+  it("a workspace PATCH leaves a job chat in the app in its job folder", async () => {
+    const before = tmp();
+    const after = tmp();
+    const jobFolder = tmp();
+    newApp('a1', before);
+    newChat('c1', 'a1', before);
+    newChat('job', 'a1', jobFolder);
+    store.jobChats.add('job', jobFolder);
+
+    expect((await send('PATCH', '/api/apps/a1', { workspacePath: after })).status).toBe(200);
+    expect(store.chats.get('c1')?.workspace).toEqual({ kind: 'machine', nodeId: 'node-pc', root: after });
+    // Moved, it would fail every turn after (its folder must stay its job folder).
+    expect(store.chats.get('job')?.workspace).toEqual({ kind: 'machine', nodeId: 'node-pc', root: jobFolder });
+  });
+
   it('DELETE moves its chats to no app, keeping them, and announces each one', async () => {
     const root = tmp();
     newApp('a1', root);

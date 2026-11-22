@@ -606,8 +606,11 @@ export class TurnRunner {
       const plan = planMode && tools.some((t) => t.source === 'thread' && t.name === PLAN_TOOL) ? createPlanGate() : undefined;
       const canRecall = tools.some((t) => t.source === 'recall');
       const prompts = this.prompts;
+      // A job chat can sit in an app (so the Code tab lists it there), but its prompt gets none of the app's notes or
+      // its linked project's instructions and memory: they are the user's own, and a job's brief is untrusted.
+      const promptChat = job ? null : chat;
       const requestProfile = prompts.withRecall(
-        prompts.withArtifacts(prompts.withTools(prompts.withSandbox(prompts.withFolders(prompts.withAppNotes(prompts.withProjectMemory(prompts.withProjectInstructions(prompts.withGlobalMemory(profile, chat, canRecall), chat), chat), chat), folders), workspaceRoot, folders), tools), tools),
+        prompts.withArtifacts(prompts.withTools(prompts.withSandbox(prompts.withFolders(prompts.withAppNotes(prompts.withProjectMemory(prompts.withProjectInstructions(prompts.withGlobalMemory(profile, promptChat, canRecall), promptChat), promptChat), promptChat), folders), workspaceRoot, folders), tools), tools),
         canRecall
       );
       // Other machines' folder paths in tool calls and results, as they are
