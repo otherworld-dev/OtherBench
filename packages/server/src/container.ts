@@ -51,6 +51,7 @@ import { ProjectMemoryService } from './memory/service.js';
 import { MemoryQueue } from './memory/shared.js';
 import { AppNotesService } from './app-notes/service.js';
 import { createPeerApp } from './peer/app.js';
+import { startSyncLogSweep } from './sync-log-sweep.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
 import { chatIsIdle, forwardedApi, PeerInfluence, peerComputerOffReason, RemoteRuns } from './peer/forward.js';
@@ -697,7 +698,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     events,
     identity,
     createApp: (service) =>
-      createPeerApp(service, { forwardedApi: () => forwarded, ...(options.streamTimings ? { keepaliveMs: options.streamTimings.keepaliveMs } : {}) }) as never,
+      createPeerApp(service, { forwardedApi: () => forwarded, pulled: (nodeId, since) => store.sync?.notePulled(nodeId, since), ...(options.streamTimings ? { keepaliveMs: options.streamTimings.keepaliveMs } : {}) }) as never,
     port: options.peerPort ?? DEFAULT_PEER_PORT,
     hosts: options.peerHosts && options.peerHosts.length > 0 ? options.peerHosts : ['0.0.0.0'],
     schemaVersion: SCHEMA_VERSION,
@@ -756,6 +757,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
 
   // The daily abandoned-attachment sweep, started once the notes service exists.
   let abandonedSweep: AbandonedSweeper | null = null;
+  // The change log and tombstones, tidied a little after the start and daily (sync-log-sweep.ts).
+  const syncLogSweep = startSyncLogSweep({ store });
   // What close() set going without waiting, for settled().
   let sandboxClosed: Promise<void> = Promise.resolve();
   let terminalsClosed: Promise<void> = Promise.resolve();
@@ -802,6 +805,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       container.overview?.dispose();
       // And the abandoned-attachment sweep's.
       abandonedSweep?.stop();
+      syncLogSweep.stop();
       // Computer use ends with the server: the driver is told, and nothing starts afterwards.
       computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).

@@ -48,7 +48,7 @@ function syncNode(name: string, options: { schemaVersion?: number; appVersion?: 
     secrets,
     events: bus,
     identity: new IdentityStore(() => store.nodes.self().id, null),
-    createApp: (s) => createPeerApp(s) as never,
+    createApp: (s) => createPeerApp(s, { pulled: (nodeId, since) => store.sync.notePulled(nodeId, since) }) as never,
     port: 0,
     hosts: ['127.0.0.1'],
     schemaVersion: options.schemaVersion ?? SCHEMA_VERSION,
@@ -295,6 +295,22 @@ describe('syncing two machines over the peer listener', () => {
     expect(laptop.store.chats.get('chat')).toMatchObject({ title: 'From the PC' });
     expect(laptop.store.peers.get('node-PC')!.lastSyncSeq).toBe(pc.store.sync.latestSeq());
     expect(laptop.syncer.status('node-PC')).toMatchObject({ error: null, lastSyncedAt: expect.any(Number) });
+  });
+
+  it('notes how far each paired machine has pulled, which is what lets this machine tidy its change log', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    await pairNodes(pc, laptop);
+    const heard = (): unknown => pc.db.prepare('SELECT node_id, pulled_seq FROM sync_peer_cursor').all();
+
+    await laptop.syncer.pullFrom('node-PC');
+    // Its first request asked from the start.
+    expect(heard()).toEqual([{ node_id: 'node-Laptop', pulled_seq: 0 }]);
+
+    // The next one carries where it got to.
+    await laptop.syncer.pullFrom('node-PC');
+    expect(heard()).toEqual([{ node_id: 'node-Laptop', pulled_seq: pc.store.sync.latestSeq() }]);
   });
 
   it('refuses to sync with a machine on a different schema, saying which to update', async () => {
