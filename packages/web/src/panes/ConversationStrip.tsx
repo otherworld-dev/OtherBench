@@ -9,6 +9,7 @@ import { useChanged } from '../lib/useChanged.js';
 import { setChatPinned } from '../state/chatActions.js';
 import { streamStatusText } from '../state/machines.js';
 import { useClaudeAccounts } from '../state/claudeAccounts.js';
+import { useChatMessages } from '../state/chatMessages.js';
 import { useOtherBenchStore } from '../state/store.js';
 
 const OUTLINE_USER_CHARS = 60;
@@ -83,7 +84,7 @@ export interface ConversationStripProps {
 }
 
 export function ConversationStrip({ chat, viewer, onGoTo }: ConversationStripProps): JSX.Element {
-  const messages = useOtherBenchStore((s) => s.messages);
+  const chatMessages = useChatMessages(chat.id);
   const streamStatus = useOtherBenchStore((s) => s.streamStatus);
   const machines = useOtherBenchStore((s) => s.machines);
   const overlayOpen = useOtherBenchStore((s) => s.inspectorOverlayOpen);
@@ -97,7 +98,6 @@ export function ConversationStrip({ chat, viewer, onGoTo }: ConversationStripPro
   if (useChanged([chat.id])) setPinError(null);
 
   const turns = useMemo(() => {
-    const chatMessages = Object.values(messages).filter((m) => m.chatId === chat.id);
     if (!chat.headMessageId) return [];
     let path: CanonMessage[];
     try {
@@ -117,7 +117,7 @@ export function ConversationStrip({ chat, viewer, onGoTo }: ConversationStripPro
       out.push({ user: m, reply });
     });
     return out;
-  }, [messages, chat.id, chat.headMessageId]);
+  }, [chatMessages, chat.headMessageId]);
 
   const latest = turns.at(-1);
   const status = streamStatusText(streamStatus, chat, machines);

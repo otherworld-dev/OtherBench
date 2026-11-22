@@ -10,6 +10,7 @@ import { ApiError, api } from '../state/api.js';
 import { StartChatError, startChat } from '../state/startChat.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useOtherBenchStore } from '../state/store.js';
+import { useChatMessages } from '../state/chatMessages.js';
 import { useChatSync } from '../state/useChatSync.js';
 import { useStopReply } from '../state/useStopReply.js';
 import { useUnsentText } from '../state/unsent.js';
@@ -23,9 +24,9 @@ import { useUnsentText } from '../state/unsent.js';
 export function QuickChat(): JSX.Element {
   const profiles = useOtherBenchStore((s) => s.profiles);
   const setProfiles = useOtherBenchStore((s) => s.setProfiles);
-  const messages = useOtherBenchStore((s) => s.messages);
   const registerMessage = useOtherBenchStore((s) => s.registerMessage);
   const [chat, setChat] = useState<Chat | null>(null);
+  const messages = useChatMessages(chat?.id ?? null);
   const [text, setText] = useState('');
   useUnsentText(text);
   // This window is used on its own while the main one stays hidden: it reports to the updater itself.
@@ -80,12 +81,9 @@ export function QuickChat(): JSX.Element {
 
   const thread = useMemo(
     () =>
-      chat
-        ? Object.values(messages)
-            .filter((m) => m.chatId === chat.id)
-            .sort((a, b) => a.createdAt - b.createdAt || (a.role === 'user' ? -1 : 1))
-        : [],
-    [messages, chat]
+      // A copy: the array is the store's own.
+      [...messages].sort((a, b) => a.createdAt - b.createdAt || (a.role === 'user' ? -1 : 1)),
+    [messages]
   );
   const streaming = thread.some((m) => m.status === 'streaming');
   const profile = profiles.find((p) => p.isDefault && p.archivedAt === null) ?? profiles.find((p) => p.archivedAt === null) ?? null;

@@ -2,7 +2,7 @@ import { useMemo, useState, type Dispatch, type KeyboardEvent, type RefObject, t
 import type { Chat } from '@otherbench/core/ports/store.js';
 import { promptHistory } from '../lib/promptHistory.js';
 import { useChanged } from '../lib/useChanged.js';
-import { useOtherBenchStore } from '../state/store.js';
+import { useChatMessages } from '../state/chatMessages.js';
 
 /** A recalled message showing in the box: how far back it is, and the draft to put back. */
 export type HistoryBrowsing = { index: number; draft: string };
@@ -26,9 +26,13 @@ export interface ComposerHistory {
 
 /** Up and Down in the composer through this branch's earlier messages, keeping the draft aside to put back. */
 export function useComposerHistory({ chat, storedChat, parentId, text, setText, caretToRef }: ComposerHistoryInput): ComposerHistory {
-  const messages = useOtherBenchStore((s) => s.messages);
+  // A branch never leaves its chat, so this chat's messages are all it can walk.
+  const chatMessages = useChatMessages(chat.id);
   // Up and Down through this branch's earlier messages: which one is showing, and the draft to put back.
-  const history = useMemo(() => promptHistory(messages, parentId ?? (storedChat ?? chat).headMessageId), [messages, parentId, storedChat, chat]);
+  const history = useMemo(
+    () => promptHistory(Object.fromEntries(chatMessages.map((m) => [m.id, m])), parentId ?? (storedChat ?? chat).headMessageId),
+    [chatMessages, parentId, storedChat, chat]
+  );
   const [browsing, setBrowsing] = useState<HistoryBrowsing | null>(null);
   // Another chat (or branch) has its own history.
   if (useChanged([chat.id, parentId])) setBrowsing(null);

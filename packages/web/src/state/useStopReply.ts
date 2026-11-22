@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
 import { toast } from '../lib/toasts.js';
 import { api } from './api.js';
+import { useStreamingIds } from './chatMessages.js';
 import { workingElsewhere } from './peerActivity.js';
 import { useOtherBenchStore } from './store.js';
 
@@ -16,17 +16,9 @@ export function useStopReply(
   chatId: string | null,
   onFailed: (message: string) => void = (text) => void toast({ text, tone: 'error', ...(chatId !== null ? { chatId } : {}) })
 ): { inFlightIds: string[]; streaming: boolean; canStop: boolean; stop(): Promise<void> } {
-  const messages = useOtherBenchStore((s) => s.messages);
+  // This chat's only (state/chatMessages.ts): another chat's stream doesn't draw whatever holds the Stop button.
+  const inFlightIds = useStreamingIds(chatId);
   const elsewhere = useOtherBenchStore((s) => chatId !== null && workingElsewhere(s.machines, chatId) !== null);
-  const inFlightIds = useMemo(
-    () =>
-      chatId === null
-        ? []
-        : Object.values(messages)
-            .filter((m) => m.chatId === chatId && m.status === 'streaming')
-            .map((m) => m.id),
-    [messages, chatId]
-  );
   const streaming = inFlightIds.length > 0;
   return {
     inFlightIds,
