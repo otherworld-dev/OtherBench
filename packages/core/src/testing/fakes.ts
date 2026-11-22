@@ -940,12 +940,15 @@ class InMemoryPushSubscriptionRepo implements PushSubscriptionRepo {
 
 /** Job chats (migration 051), in memory. */
 class InMemoryJobChatStore implements JobChatStore {
-  private readonly rows = new Map<string, string>();
-  add(chatId: string, folder: string): void {
-    this.rows.set(chatId, folder);
+  private readonly rows = new Map<string, { folder: string; appContext: boolean }>();
+  add(chatId: string, folder: string, options: { appContext?: boolean } = {}): void {
+    this.rows.set(chatId, { folder, appContext: options.appContext === true });
   }
   folderFor(chatId: string): string | null {
-    return this.rows.get(chatId) ?? null;
+    return this.rows.get(chatId)?.folder ?? null;
+  }
+  appContextFor(chatId: string): boolean {
+    return this.rows.get(chatId)?.appContext ?? false;
   }
   remove(chatId: string): void {
     this.rows.delete(chatId);

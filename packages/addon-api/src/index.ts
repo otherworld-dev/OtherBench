@@ -50,8 +50,12 @@ export interface JobReply {
  * only, whatever the add-on does; commands run here have their network fixed by OtherBench.
  */
 export interface AddonJobRunner {
-  /** With `appId` (an id from `apps()`), the chat is in that app, so the Code tab lists it there; it still runs in `folder`. */
-  createChat(input: { title: string; folder: string; profileId: string; appId?: string | null }): { chatId: string };
+  /**
+   * With `appId` (an id from `apps()`), the chat is in that app, so the Code tab lists it there; it still runs in
+   * `folder`. With `appContext` as well, its turns get the app's notes and its linked project's instructions and
+   * memory. Set it only for a brief the user wrote or approved: whatever a job knows can end up in its branch or reply.
+   */
+  createChat(input: { title: string; folder: string; profileId: string; appId?: string | null; appContext?: boolean }): { chatId: string };
   profile(profileId: string | null): Promise<{ id: string; name: string; archived: boolean } | null>;
   startTurn(input: { chatId: string; text: string; profileId: string }): Promise<{ userMessageId: string; messageId: string }>;
   onReplyEnded(cb: (messageId: string, status: MessageStatus) => void): () => void;

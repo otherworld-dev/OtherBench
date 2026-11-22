@@ -37,9 +37,11 @@ export interface JobReply {
 export interface JobRunner {
   /**
    * Makes a job chat held to `folder`, on this machine, never in Auto. With `appId` it is in that app, so the Code tab
-   * lists it there; it still runs in `folder`, and its prompt gets nothing of the app's (TurnRunner).
+   * lists it there; it still runs in `folder`, and its prompt gets nothing of the app's (TurnRunner) unless
+   * `appContext` is set: then every turn in it gets the app's notes and its linked project's instructions and memory.
+   * That is for a brief the user wrote or approved, since whatever a job knows can end up in its branch or its reply.
    */
-  createChat(input: { title: string; folder: string; profileId: string; appId?: string | null }): { chatId: string };
+  createChat(input: { title: string; folder: string; profileId: string; appId?: string | null; appContext?: boolean }): { chatId: string };
   /** The profile jobs would run on (`null` = the app default), or null when there is none. */
   profile(profileId: string | null): Promise<{ id: string; name: string; archived: boolean } | null>;
   /** Starts an unattended turn from the chat's current tip. */
@@ -114,10 +116,11 @@ export function createJobRunner(d: JobRunnerDeps): JobRunner {
   }
 
   return {
-    createChat({ title, folder, profileId, appId = null }) {
+    createChat({ title, folder, profileId, appId = null, appContext = false }) {
       const problem = jobFolderProblem(folder, (d.homeDir ?? homedir)());
       if (problem !== null) throw new Error(problem);
       if (appId !== null && !d.store.apps.get(appId)) throw new Error(`There is no app "${appId}" on this machine.`);
+      if (appContext && appId === null) throw new Error("A job chat needs an app to be given the app's knowledge.");
       const chat = d.store.chats.create({
         id: randomUUID(),
         title,
@@ -133,7 +136,7 @@ export function createJobRunner(d: JobRunnerDeps): JobRunner {
         memoryExcluded: true,
       });
       // From here the chat is a job chat: TurnRunner reads this row for every turn in it.
-      d.store.jobChats.add(chat.id, folder);
+      d.store.jobChats.add(chat.id, folder, { appContext });
       return { chatId: chat.id };
     },
 

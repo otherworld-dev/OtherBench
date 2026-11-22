@@ -85,6 +85,12 @@ export interface TurnRunnerOptions {
    * only, with no extra folders, Auto or Plan mode, and with `job` on the request.
    */
   jobFolderFor?: (chatId: string) => string | null;
+  /**
+   * Whether a job chat was made with its app's knowledge (the same local table). Its prompt then gets the app's notes
+   * and its linked project's instructions and memory, as an app chat's does; otherwise, and when the lookup fails,
+   * it gets none. Global memory stays out of every job.
+   */
+  jobAppContextFor?: (chatId: string) => boolean;
   /** Hands over the note Claude just picked up in reply `messageId` as a part, or null when nobody holds it (then it is ignored). */
   takeNote?: (messageId: string, noteId: string) => UserNotePart | null;
   /**

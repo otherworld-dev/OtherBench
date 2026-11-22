@@ -18,6 +18,16 @@ describe.each([
     expect(make().jobChats.folderFor('nope')).toBeNull();
   });
 
+  it("says whether a job chat was given its app's knowledge: only when it was added with it", () => {
+    const store = make();
+    store.jobChats.add('plain', 'E:\jobs\one');
+    store.jobChats.add('knowing', 'E:\jobs\two', { appContext: true });
+    expect(store.jobChats.appContextFor('plain')).toBe(false);
+    expect(store.jobChats.appContextFor('knowing')).toBe(true);
+    expect(store.jobChats.folderFor('knowing')).toBe('E:\jobs\two');
+    expect(store.jobChats.appContextFor('nope')).toBe(false);
+  });
+
   it('forgets a removed chat', () => {
     const store = make();
     store.jobChats.add('chat-1', 'E:\jobs\one');
