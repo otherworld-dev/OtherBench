@@ -5,7 +5,8 @@
 //! process on the machine can read), and stdin piped. Its first stdout line is
 //! `{"port":N,"rpc":"<word>"}`; after it, stdout and stdin carry only the
 //! computer-use channel (rpc.rs). Everything it logs goes to stderr, which is
-//! copied to `server.log` in the app's log directory. Dropping our end of
+//! copied to `server.log` in the app's log directory; the run before it is
+//! kept beside it as `server.prev.log`. Dropping our end of
 //! stdin is the shutdown signal: the server closes and exits when its stdin
 //! ends, which also covers this process dying without running any cleanup.
 
@@ -42,8 +43,12 @@ const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(60);
 /// The same for the smoke tests' build, which runs on machines busy with other test runs: a fresh
 /// server took 18-25 s to start on a machine at 100% CPU, where the app's own 15 s failed the run.
 const TEST_ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(90);
-/// How long the server gets to exit on its own after stdin closes before it is killed.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+/// How long the server gets to exit on its own after stdin closes before it is killed. The server
+/// exits as soon as it has closed everything, so a normal quit takes no longer for this; the time is
+/// for the slow case: it waits up to 5 s for an add-on to stop and 2.5 s more to close the database
+/// and unmount the sandbox's folders (server/src/cli.ts, addons/loader.ts), and at 3 s it was killed
+/// in the middle of that.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 pub struct LaunchSpec {
     pub node: PathBuf,
@@ -107,14 +112,30 @@ fn tail(path: &Path, max_bytes: u64) -> String {
     buf
 }
 
+/// This run's log, and the one kept from the run before it.
+const LOG_NAME: &str = "server.log";
+const PREV_LOG_NAME: &str = "server.prev.log";
+
+/// Opens a new, empty `server.log` in `log_dir`, first keeping the last run's as `server.prev.log`
+/// (in place of an older one): after a crash and a relaunch, the crashed run's log is still there to
+/// read. A rename that fails (the old log open in a program that locks it, say) is not an error: the
+/// server must still start, so the old log is then overwritten as it always was.
+fn open_log(log_dir: &Path) -> Result<(PathBuf, File), String> {
+    let log_path = log_dir.join(LOG_NAME);
+    if log_path.exists() {
+        let _ = fs::rename(&log_path, log_dir.join(PREV_LOG_NAME));
+    }
+    let log = File::create(&log_path).map_err(|e| format!("cannot create {}: {e}", log_path.display()))?;
+    Ok((log_path, log))
+}
+
 /// Starts the server. `handler` reads the computer-use channel (computer.rs)
 /// from the server's stdout, on a thread of its own, and is told when the
 /// channel is lost.
 pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server, String> {
     let token = generate_token()?;
     fs::create_dir_all(&spec.log_dir).map_err(|e| format!("cannot create log directory: {e}"))?;
-    let log_path = spec.log_dir.join("server.log");
-    let mut log = File::create(&log_path).map_err(|e| format!("cannot create {}: {e}", log_path.display()))?;
+    let (log_path, mut log) = open_log(&spec.log_dir)?;
 
     let mut cmd = Command::new(plain_path(&spec.node));
     cmd.arg(plain_path(&spec.script)).args(serve_args(spec));
@@ -288,6 +309,51 @@ mod tests {
         assert_eq!(PathBuf::from(&args[db + 1]), PathBuf::from(r"C:\Temp\e2e").join("otherbench.db"));
         let peer = args.iter().position(|a| a == "--peer-port").expect("--peer-port");
         assert_eq!(args[peer + 1], "0");
+    }
+
+    fn temp_logs(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("otherbench-sidecar-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_first_start_makes_an_empty_log_and_no_previous_one() {
+        let dir = temp_logs("first");
+        let (path, _log) = open_log(&dir).unwrap();
+        assert_eq!(path, dir.join("server.log"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        assert!(!dir.join("server.prev.log").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_start_keeps_the_last_runs_log_and_drops_the_one_before_it() {
+        let dir = temp_logs("rotate");
+        fs::write(dir.join("server.prev.log"), "two runs ago").unwrap();
+        fs::write(dir.join("server.log"), "the run that crashed").unwrap();
+        let (path, mut log) = open_log(&dir).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("server.prev.log")).unwrap(), "the run that crashed");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        // The new log is the one written to, and the next start keeps it in turn.
+        log.write_all(b"this run").unwrap();
+        drop(log);
+        let _ = open_log(&dir).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("server.prev.log")).unwrap(), "this run");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_log_that_cannot_be_kept_does_not_stop_the_new_one() {
+        // A folder named server.prev.log can't be replaced by a file, so the rename fails.
+        let dir = temp_logs("blocked");
+        fs::create_dir_all(dir.join("server.prev.log").join("in the way")).unwrap();
+        fs::write(dir.join("server.log"), "the run before").unwrap();
+        let (path, _log) = open_log(&dir).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "");
+        assert!(dir.join("server.prev.log").is_dir());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
