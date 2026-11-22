@@ -788,6 +788,21 @@ export function runStoreContract(
         ]);
       });
 
+      it("chatTree lists a chat's messages whole, oldest first, by time then id", () => {
+        const chatId = seedChat(store, 'chat-a').chat.id;
+        const otherId = seedChat(store, 'chat-b').chat.id;
+        expect(store.messages.chatTree(chatId)).toEqual([]);
+        store.messages.create(makeMessageInput({ id: 'm1', chatId, role: 'user', createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'm3', chatId, parentId: 'm1', role: 'assistant', createdAt: 20, parts: [{ type: 'text', text: 'three' }], keptAt: 25 }));
+        store.messages.create(makeMessageInput({ id: 'm2', chatId, parentId: 'm1', role: 'assistant', createdAt: 20, status: 'streaming' }));
+        store.messages.create(makeMessageInput({ id: 'x1', chatId: otherId, role: 'user', createdAt: 5 }));
+        const tree = store.messages.chatTree(chatId);
+        expect(tree.map((m) => m.id)).toEqual(['m1', 'm2', 'm3']);
+        // Each as `get` gives it.
+        expect(tree).toEqual(['m1', 'm2', 'm3'].map((id) => store.messages.get(id)));
+        expect(store.messages.chatTree('no-such-chat')).toEqual([]);
+      });
+
       it('a message records the machine that wrote it, defaulting to this one', () => {
         const chatId = seedChat(store, 'chat-a').chat.id;
         const self = store.nodes.self().id;

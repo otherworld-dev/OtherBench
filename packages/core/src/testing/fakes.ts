@@ -1578,6 +1578,13 @@ class InMemoryMessageRepo implements MessageRepo {
       .map((m) => ({ id: m.id, parentId: m.parentId, role: m.role }));
   }
 
+  chatTree(chatId: string): CanonMessage[] {
+    return [...this.byId.values()]
+      .filter((m) => m.chatId === chatId)
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((m) => structuredClone(m));
+  }
+
   searchText(query: string, limit: number, offset = 0): { messageId: string; chatId: string; snippet: string }[] {
     // Every word must appear, like the SQLite store's FTS match.
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);

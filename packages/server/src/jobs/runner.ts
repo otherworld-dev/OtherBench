@@ -9,7 +9,7 @@ import type { Sandbox } from '@otherbench/core/ports/sandbox.js';
 import type { Store } from '@otherbench/core/ports/store.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { MessageStatus } from '@otherbench/core/types/messages.js';
-import { chatTip } from '../routes/chats.js';
+import { chatTip } from '../chat-read.js';
 import { INSTALL_HOSTS, SANDBOX_PLACEHOLDERS } from './git.js';
 
 /** The longest an install or test command may run in the sandbox (run_command's own cap). */

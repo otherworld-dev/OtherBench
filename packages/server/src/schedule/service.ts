@@ -18,7 +18,7 @@ import type { AppEvent } from '@otherbench/core/types/events.js';
 import type { MessageStatus } from '@otherbench/core/types/messages.js';
 import type { Workspace, WorkspaceStatus } from '@otherbench/core/types/workspace.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
-import { chatTip, collectMessageTree } from '../routes/chats.js';
+import { chatTip, collectMessageTree } from '../chat-read.js';
 import { runAttachmentParts } from './attachments.js';
 
 export interface ScheduleLimits {
@@ -394,7 +394,7 @@ export class ScheduleService {
     return { chatId: chat.id, parentId: this.tipOf(chat.id, chat.headMessageId) };
   }
 
-  /** The end of the chat's active branch, which must be a finished reply; null for an empty chat (routes/chats.ts `chatTip`). */
+  /** The end of the chat's active branch, which must be a finished reply; null for an empty chat (chat-read.ts `chatTip`). */
   private tipOf(chatId: string, headId: string | null): string | null {
     return chatTip(this.store, chatId, headId);
   }
