@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
+import { Overlay } from '../components/Overlay.js';
 import { APP_NAME_MAX, isGithubRepo } from '@otherbench/core/domain/apps.js';
 import { compareProjects, projectDisplayName, projectLookup, projectParentOf } from '@otherbench/core/domain/projects.js';
 import type { App, Project } from '@otherbench/core/ports/store.js';
@@ -83,7 +84,7 @@ export function AppView({ page, onClose }: AppViewProps): JSX.Element {
 
 function MissingApp({ onClose }: { onClose: () => void }): JSX.Element {
   return (
-    <div data-testid="app-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
+    <Overlay label="Edit app" testId="app-view" onEscape={onClose}>
       <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--bg-raised)] px-4 py-3">
         <h2 className="label-caps text-base">Edit app</h2>
         <span className="flex-1" />
@@ -92,7 +93,7 @@ function MissingApp({ onClose }: { onClose: () => void }): JSX.Element {
         </button>
       </div>
       <p className="p-6 text-sm text-[var(--text-muted)]">This app no longer exists. It may have been deleted in another tab or on another machine.</p>
-    </div>
+    </Overlay>
   );
 }
 
@@ -382,14 +383,9 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
     }
   }
 
-  function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
-    if (e.key !== 'Escape' || e.defaultPrevented || confirmDiscard) return;
-    e.preventDefault();
-    requestClose();
-  }
-
   return (
-    <div data-testid="app-view" onKeyDown={onKeyDown} className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
+    // The discard question takes its own Esc. Focus goes back through `close` above, which knows a second place to try.
+    <Overlay label={creating ? 'New app' : 'Edit app'} testId="app-view" restoreFocus={false} onEscape={() => (confirmDiscard ? undefined : requestClose())}>
       <div className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--bg-raised)] px-4 py-3">
         <h2 className="label-caps text-base">{creating ? 'New app' : 'Edit app'}</h2>
         <span className="flex-1" />
@@ -667,6 +663,6 @@ function AppForm({ app, returnFocus, onClose }: { app: App | null; returnFocus?:
           onCancel={keepEditing}
         />
       )}
-    </div>
+    </Overlay>
   );
 }

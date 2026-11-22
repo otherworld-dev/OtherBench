@@ -7,7 +7,8 @@ import { openChat } from '../overview/openFromOverview.js';
 export function Toaster(): JSX.Element {
   const toasts = useToasts((s) => s.toasts);
   return (
-    <div role="status" aria-live="polite" className="pointer-events-none fixed bottom-3 right-3 z-50 flex max-w-[min(26rem,calc(100vw-1.5rem))] flex-col gap-2">
+    // data-overlay-keep: a full-screen view makes the app behind it inert (components/Overlay.tsx), but not these.
+    <div role="status" aria-live="polite" data-overlay-keep="" className="pointer-events-none fixed bottom-3 right-3 z-50 flex max-w-[min(26rem,calc(100vw-1.5rem))] flex-col gap-2">
       {toasts.map((t) => (
         <ToastView key={t.id} toast={t} />
       ))}

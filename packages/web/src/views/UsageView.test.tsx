@@ -176,6 +176,17 @@ describe('UsageView', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('is a dialog that Escape closes', async () => {
+    reset();
+    mockedUsageGet.mockResolvedValue(makeRollup());
+    mockedModelsList.mockResolvedValue([]);
+    const onClose = vi.fn();
+    render(<UsageView onClose={onClose} />);
+    expect(screen.getByRole('dialog', { name: 'Usage & pricing' })).toBe(screen.getByTestId('usage-view'));
+    await userEvent.setup().keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('shows an honest error state when the rollup fetch fails', async () => {
     reset();
     mockedUsageGet.mockRejectedValue(new Error('down'));

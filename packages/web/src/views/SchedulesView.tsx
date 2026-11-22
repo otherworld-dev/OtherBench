@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
+import { Overlay } from '../components/Overlay.js';
 import type { ScheduleTarget } from '@otherbench/core/domain/schedule.js';
 import { SCHEDULE_PEER_CHANGE_TEXT } from '@otherbench/core/domain/schedule-peers.js';
 import type { ScheduleView } from '@otherbench/core/ports/store.js';
@@ -58,13 +59,6 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
     const timer = setInterval(reload, SCHEDULES_POLL_MS);
     return () => clearInterval(timer);
   }, [reload]);
-  useEffect(() => {
-    function onKey(e: KeyboardEvent): void {
-      if (e.key === 'Escape' && !e.defaultPrevented && editing === null && deleting === null) onClose();
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [editing, deleting, onClose]);
 
   const profileName = (id: string): string => profiles.find((p) => p.id === id)?.name ?? 'Unknown profile';
   // As the run decides it: the schedule's Auto counts only on a Claude Code profile.
@@ -115,7 +109,8 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
   }
 
   return (
-    <div data-testid="schedules-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
+    // Escape closes the page only with no editor or delete question open: those close themselves first.
+    <Overlay label="Scheduled" testId="schedules-view" onEscape={() => (editing === null && deleting === null ? onClose() : undefined)}>
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
         <h2 className="label-caps text-base">Scheduled</h2>
         <div className="flex gap-2">
@@ -236,6 +231,6 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
           onCancel={() => setDeleting(null)}
         />
       )}
-    </div>
+    </Overlay>
   );
 }
