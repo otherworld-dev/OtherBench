@@ -249,6 +249,27 @@ describe('Thread', () => {
     expect(screen.queryByText("Couldn't open this chat.")).toBeNull();
   });
 
+  it("a message that can't be drawn takes out only itself, and offers its raw content", async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    // A part shape this build doesn't know how to draw (text that isn't text), as a newer paired machine might send.
+    const odd = variantMessage('odd', 'u1', { parts: [{ type: 'text', text: { not: 'a string' } as unknown as string }] });
+    useOtherBenchStore.setState({
+      chats: [makeChat({ headMessageId: 'u2' })],
+      messages: { u1: makeMessage('u1', 'chat-1'), odd, u2: makeMessage('u2', 'chat-1', { parentId: 'odd' }) },
+    });
+    render(<ThreadForChat chatId="chat-1" />);
+    const thread = within(screen.getByTestId('thread-scroll'));
+    expect(thread.getByText('text of u1')).toBeInTheDocument();
+    expect(thread.getByText('text of u2')).toBeInTheDocument();
+    const alert = thread.getByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't show this message.");
+    await userEvent.setup().click(within(alert).getByRole('button', { name: 'Show raw content' }));
+    expect(alert).toHaveTextContent('"not": "a string"');
+    // The message box is still there to carry on with.
+    expect(screen.getByRole('textbox', { name: /message/i })).toBeInTheDocument();
+    logged.mockRestore();
+  });
+
   it('has Gwyn wave in a chat with no messages yet', () => {
     useOtherBenchStore.setState({ chats: [makeChat()] });
     render(<ThreadForChat chatId="chat-1" />);

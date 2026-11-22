@@ -4,6 +4,7 @@ import type { ModelInfo } from '@otherbench/core/types/config.js';
 import type { CanonMessage } from '@otherbench/core/types/messages.js';
 import type { PricingSnapshot, RecordedUsage, Usage } from '@otherbench/core/types/usage.js';
 import { estimateCost } from '@otherbench/core/types/usage.js';
+import { ErrorBoundary } from './ErrorBoundary.js';
 import { Message } from './Message.js';
 import type { MessageExtras } from '../state/reducer.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -167,7 +168,9 @@ export function VariantCard({
         </span>
       </div>
 
-      <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} pendingAsks={pendingAsks} onAnswerAsk={onAnswerAsk} {...(progressByCall ? { progressByCall } : {})} {...(thinkingSince !== undefined ? { thinkingSince } : {})} {...(thinkingTokens !== undefined ? { thinkingTokens } : {})} />
+      <ErrorBoundary what="this reply" variant="inline" raw={variant} resetKey={variant.id}>
+        <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} pendingAsks={pendingAsks} onAnswerAsk={onAnswerAsk} {...(progressByCall ? { progressByCall } : {})} {...(thinkingSince !== undefined ? { thinkingSince } : {})} {...(thinkingTokens !== undefined ? { thinkingTokens } : {})} />
+      </ErrorBoundary>
 
       <div className="flex items-center justify-between gap-2">
         {/* One cut off when its machine went away is that machine's to finish: regenerate instead (forward.ts keepCutOffReply). */}

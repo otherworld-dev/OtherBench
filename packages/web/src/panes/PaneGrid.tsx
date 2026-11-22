@@ -2,6 +2,7 @@ import { Fragment, useState, type DragEvent, type JSX } from 'react';
 import { projectDisplayNameById } from '@otherbench/core/domain/projects.js';
 import { AllAppsPage } from '../code/AllAppsPage.js';
 import { AppHome } from '../code/AppHome.js';
+import { ErrorBoundary } from '../components/ErrorBoundary.js';
 import { PinIcon } from '../components/icons.js';
 import { isAllAppsTab } from '../state/allAppsTab.js';
 import { parseAppTab } from '../state/appTab.js';
@@ -115,15 +116,18 @@ function Pane({ index, chatId, focused, multi, maximised, pinned }: PaneProps): 
           </button>
         </div>
       )}
-      {isViewTab(chatId) ? <ViewerTab tabId={chatId} /> : projectId !== null ? (
-        <ProjectHome projectId={projectId} />
-      ) : appId !== null ? (
-        <AppHome appId={appId} />
-      ) : allApps ? (
-        <AllAppsPage />
-      ) : (
-        <Thread chat={chat} />
-      )}
+      {/* A pane that can't be drawn leaves the others, and its own header, up; another chat in it is tried afresh. */}
+      <ErrorBoundary what={isChatTab(chatId) ? 'this chat' : 'this pane'} resetKey={chatId}>
+        {isViewTab(chatId) ? <ViewerTab tabId={chatId} /> : projectId !== null ? (
+          <ProjectHome projectId={projectId} />
+        ) : appId !== null ? (
+          <AppHome appId={appId} />
+        ) : allApps ? (
+          <AllAppsPage />
+        ) : (
+          <Thread chat={chat} />
+        )}
+      </ErrorBoundary>
     </div>
   );
 }

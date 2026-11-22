@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type JSX } from 'react';
 import type { Chat } from '@otherbench/core/ports/store.js';
 import type { Part } from '@otherbench/core/types/messages.js';
+import { ErrorBoundary } from '../components/ErrorBoundary.js';
 import { Message } from '../components/Message.js';
 import { hideQuick, onDesktopEvent, openChatInMain } from '../desktop/bridge.js';
 import { useUpdateActivity } from '../desktop/useUpdateActivity.js';
@@ -146,7 +147,9 @@ export function QuickChat(): JSX.Element {
       {thread.length > 0 && (
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto" data-testid="quick-thread">
           {thread.map((m) => (
-            <Message key={m.id} message={m} />
+            <ErrorBoundary key={m.id} what="this message" variant="inline" raw={m}>
+              <Message message={m} />
+            </ErrorBoundary>
           ))}
         </div>
       )}

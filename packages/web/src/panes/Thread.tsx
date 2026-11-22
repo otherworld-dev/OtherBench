@@ -7,6 +7,7 @@ import type { Chat } from '@otherbench/core/ports/store.js';
 import type { CanonMessage, Part } from '@otherbench/core/types/messages.js';
 import { GitBar } from '../code/GitBar.js';
 import { Composer } from '../components/Composer.js';
+import { ErrorBoundary } from '../components/ErrorBoundary.js';
 import { FindBar } from '../components/FindBar.js';
 import { Gwyn } from '../components/Gwyn.js';
 import { ComputerBanner } from '../components/ComputerBanner.js';
@@ -690,8 +691,9 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                       );
                     }
                     return (
+                      // One message that can't be drawn (a part from a newer paired machine) takes out only itself.
+                      <ErrorBoundary key={m.id} what="this message" variant="inline" raw={m}>
                       <Message
-                        key={m.id}
                         message={m}
                         framed
                         showAllText={m.id === unfoldId}
@@ -738,6 +740,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                             : undefined
                         }
                       />
+                      </ErrorBoundary>
                     );
                   })}
                   {end !== null && (
