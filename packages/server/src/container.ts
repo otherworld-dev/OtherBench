@@ -70,6 +70,7 @@ import { AppEventBus, announceMcpChanges, markUnreadOnFinish, withStoreEvents } 
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
+import { TurnGate } from './turn-gate.js';
 import { ChatSendService } from './chat-sends/service.js';
 import { peerChatSendRemote } from './chat-sends/remote.js';
 import { createAppChat } from './routes/chats.js';
@@ -172,6 +173,12 @@ export interface Container {
    * only so route tests can build a Container without one.
    */
   events?: AppEventBus;
+  /**
+   * The one answer to "is this chat busy", and where a chat is taken for a
+   * turn being started (turn-gate.ts). Always set by `createContainer`;
+   * optional only so route tests can build a Container without one.
+   */
+  turnGate?: TurnGate;
   /**
    * This machine's Claude account logins (spec 2026-10-28-claude-accounts-design):
    * which one each Claude Code turn runs on, and each one's plan usage. Always
@@ -532,6 +539,12 @@ async function openContainer(options: ContainerOptions, onStoreClosed: () => voi
   // The chats paired machines have put input into; a chat's mark goes once nothing that input could reach is left.
   // `container` is assigned below, before any event can arrive.
   const peerInfluence = new PeerInfluence();
+  // Whether a chat is busy, and the one place a chat is taken for a turn being started (turn-gate.ts).
+  const turnGate = new TurnGate((chatId) => events.runningTurns().some((t) => t.chatId === chatId));
+  events.subscribe((e) => {
+    // A chat that is gone holds nothing: a start still on its way there fails on its own.
+    if (e.type === 'chat-deleted') turnGate.forget(e.chatId);
+  });
   events.subscribe((e) => {
     // A reply started while the chat is marked is remembered, so a turn its agent later starts by itself inherits it.
     if (e.type === 'turn-started') peerInfluence.started(e.chatId, e.messageIds);
@@ -772,6 +785,7 @@ async function openContainer(options: ContainerOptions, onStoreClosed: () => voi
   const container: Container = {
     store,
     events,
+    turnGate,
     ...(options.streamTimings ? { streamTimings: options.streamTimings } : {}),
     secrets,
     peers,
@@ -870,10 +884,11 @@ async function openContainer(options: ContainerOptions, onStoreClosed: () => voi
     turnRunner,
     engine,
     streamRegistry,
-    startTurn: (input) => startTurn(container, input),
+    startTurn: (input, claim) => startTurn(container, input, claim),
     resolveProfile: (id) => resolveProfile({ store, secrets }, id),
     events,
     memory,
+    gate: turnGate,
   });
   notes = notesService;
   container.notes = notesService;
@@ -891,10 +906,10 @@ async function openContainer(options: ContainerOptions, onStoreClosed: () => voi
   chatSends = new ChatSendService({
     store,
     turnRunner,
-    startTurn: (input) => startTurn(container, input),
+    startTurn: (input, claim) => startTurn(container, input, claim),
     resolveProfile: (id) => resolveProfile({ store, secrets }, id),
     resolveWorkspace: (ws, on) => workspaceResolver(container)(ws, on),
-    isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
+    gate: turnGate,
     hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
     createAppChat: (app, title, id) => createAppChat(container, app, title, id),
     emit: (e) => events.emit(e),
@@ -922,14 +937,14 @@ async function openContainer(options: ContainerOptions, onStoreClosed: () => voi
   container.jobGitFor = jobGitFor;
   // Scheduled tasks: built after the memory services, started after their sweep, and
   // after the app event bus is attached to the turn runner (events.runningTurns() is
-  // what tells the service a chat is busy).
+  // what tells the turn gate a reply is running).
   container.schedules = new ScheduleService({
     store,
     turnRunner,
-    startTurn: (input) => startTurn(container, input),
+    startTurn: (input, claim) => startTurn(container, input, claim),
     resolveProfile: (id) => resolveProfile({ store, secrets }, id),
     resolveWorkspace: (ws) => workspaceResolver(container)(ws),
-    isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
+    gate: turnGate,
     hasWaitingNotes: (chatId) => notesService.hasWaiting(chatId),
     emit: (e) => events.emit(e),
   });

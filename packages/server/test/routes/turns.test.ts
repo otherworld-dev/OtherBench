@@ -11,6 +11,7 @@ import { CLEAR_MID_REPLY, CLEAR_ON_ITS_OWN, COMPACT_NO_REGENERATE } from '../../
 import type { Container } from '../../src/container.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
+import { TurnGate } from '../../src/turn-gate.js';
 
 // ---------------------------------------------------------------------------
 // A hand-controllable ChatEngine, keyed by EngineRequest.messageId, so tests
@@ -389,6 +390,46 @@ describe('POST /api/messages/:id/retry', () => {
     await reader.cancel();
   });
 
+  it('two retries of one reply at once: one is accepted, the other is told it is already streaming', async () => {
+    const { chatId, profileIds } = seedChat(1);
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+    const messageId = assistantMessageIds[0] as string;
+    push(messageId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+    const retry = vi.spyOn(container.turnRunner, 'retry');
+
+    const [first, second] = await Promise.all([
+      app().request(`/api/messages/${messageId}/retry`, { method: 'POST' }),
+      app().request(`/api/messages/${messageId}/retry`, { method: 'POST' }),
+    ]);
+
+    expect([first.status, second.status]).toEqual([202, 409]);
+    expect(await second.text()).toMatch(/streaming/);
+    // The second never reached the runner, so it reset nothing the first had started.
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('a retry is never refused for a busy chat (the other variant still streams), and holds nothing once it has started', async () => {
+    const gate = new TurnGate((id) => container.turnRunner.runningIn(id).some((m) => container.store.messages.get(m)?.status === 'streaming'));
+    container.turnGate = gate;
+    const { chatId, profileIds } = seedChat(2);
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+    expect(assistantMessageIds).toHaveLength(2);
+    const [failingId, otherId] = assistantMessageIds as [string, string];
+    push(failingId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+    expect(gate.isBusy(chatId)).toBe(true);
+
+    expect((await app().request(`/api/messages/${failingId}/retry`, { method: 'POST' })).status).toBe(202);
+    push(failingId, FINISH);
+    push(otherId, FINISH);
+    await flush();
+    await flush();
+    expect(gate.isBusy(chatId)).toBe(false);
+  });
+
   it('a client reconnecting after a retry sees only the retried attempt in the hello replay, not the failed one', async () => {
     const { chatId, profileIds } = seedChat();
     const res = await postTurn(chatId, profileIds);
@@ -547,6 +588,28 @@ describe('POST /api/chats/:id/regenerate', () => {
       body: JSON.stringify(body),
     });
   }
+
+  it('holds the chat in the turn gate only while it starts, refused or not', async () => {
+    const gate = new TurnGate(() => false);
+    container.turnGate = gate;
+    const { chatId, assistantId } = await finishedTurn();
+    const real = container.turnRunner.regenerate.bind(container.turnRunner);
+    let held = false;
+    vi.spyOn(container.turnRunner, 'regenerate').mockImplementation(async (input) => {
+      held = gate.isBusy(chatId);
+      return real(input);
+    });
+
+    const res = await regenerate(chatId, { messageId: assistantId });
+    expect(res.status).toBe(202);
+    expect(held).toBe(true);
+    expect(gate.isBusy(chatId)).toBe(false);
+
+    // Its new reply is still streaming, so regenerating that one is refused: nothing stays held.
+    const { assistantMessageId } = (await res.json()) as { assistantMessageId: string };
+    expect((await regenerate(chatId, { messageId: assistantMessageId })).status).toBe(409);
+    expect(gate.isBusy(chatId)).toBe(false);
+  });
 
   it('adds an assistant sibling under the same user message with the same profile, moves head to it, and 202s', async () => {
     const { chatId, userMessageId, assistantId } = await finishedTurn();

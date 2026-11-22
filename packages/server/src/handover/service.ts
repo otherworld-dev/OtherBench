@@ -7,6 +7,7 @@ import { NOT_HERE } from '../claude-accounts/switcher.js';
 import type { Container } from '../container.js';
 import { chatIsIdle } from '../peer/forward.js';
 import { resolveProfile } from '../profile-resolution.js';
+import { ChatBusyError } from '../turn-gate.js';
 import { startTurn } from '../turn-start.js';
 
 /** Why a handover can't start, with the status and kind the route answers with. */
@@ -64,6 +65,10 @@ export class HandoverService {
     if (!chatIsIdle(this.container, chatId) || this.container.turnRunner.runningIn(chatId).length > 0) throw new HandoverError(409, HANDOVER_BUSY, 'busy');
     // The latest reply: nothing after it but earlier handover attempts that never finished (one that did is refused above).
     if (!store.messages.children(messageId).every(isHandoverRequest)) throw new HandoverError(409, "Only the chat's latest reply can be handed over.", 'not_latest');
+    // Taken with the checks above, before anything is awaited: nothing else starts a turn here while the profile resolves.
+    const gate = this.container.turnGate;
+    const claim = gate?.claim(chatId);
+    if (gate && !claim) throw new HandoverError(409, HANDOVER_BUSY, 'busy');
     this.running.add(chatId);
 
     let result: { userMessageId: string; assistantMessageIds: string[] };
@@ -72,10 +77,14 @@ export class HandoverService {
       const profile = await resolveProfile(this.container, message.producedBy.profileId);
       // Only Claude Code's engine runs a handover with every tool refused; a profile moved to a model API since would not.
       if (profile.connection.kind !== 'claude_code') throw new HandoverError(400, "That reply's profile no longer runs on Claude Code, so it can't write the handover.", 'not_a_reply');
-      result = await startTurn(this.container, { chatId, parentId: messageId, userParts: [{ type: 'handover-request' }], profiles: [profile] });
+      result = await startTurn(this.container, { chatId, parentId: messageId, userParts: [{ type: 'handover-request' }], profiles: [profile] }, claim ?? undefined);
     } catch (err) {
       this.running.delete(chatId);
+      // Something the person started there while the profile resolved: busy, as if it had been running when they asked.
+      if (err instanceof ChatBusyError) throw new HandoverError(409, HANDOVER_BUSY, 'busy');
       throw err;
+    } finally {
+      claim?.release();
     }
     const summaryId = result.assistantMessageIds[0]!;
     void this.finish(chatId, summaryId)

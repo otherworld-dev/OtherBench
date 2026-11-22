@@ -3,9 +3,10 @@ import type { TurnInput, TurnResult } from '@otherbench/core/domain/turn.js';
 import type { SelfStart } from '@otherbench/core/ports/chat-engine.js';
 import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { Container } from './container.js';
+import { ChatBusyError, type TurnClaim } from './turn-gate.js';
 
 /** What starting a turn needs from the container. */
-export type TurnStartDeps = Pick<Container, 'store' | 'turnRunner' | 'streamRegistry' | 'memory' | 'events'>;
+export type TurnStartDeps = Pick<Container, 'store' | 'turnRunner' | 'streamRegistry' | 'memory' | 'events' | 'turnGate'>;
 
 /**
  * Starts a turn the way `POST /chats/:id/turns` does once its body is valid,
@@ -16,8 +17,28 @@ export type TurnStartDeps = Pick<Container, 'store' | 'turnRunner' | 'streamRegi
  * update that marks the chat active, and `turn-started` goes out.
  * Rethrows whatever `turnRunner.run` throws (the route maps
  * `InvalidAttachmentReferenceError` to a 400), after re-arming memory.
+ *
+ * The chat is held in the turn gate (turn-gate.ts) from the first line here
+ * until `turn-started` is out, so nothing that asks the gate finds it free
+ * while the rows are made. A starter that must have the chat to itself passes
+ * the `claim` it took when it looked: it is checked here, in the same
+ * synchronous step that makes the rows, and a `ChatBusyError` is thrown,
+ * with nothing written, when something else started there meanwhile. Without
+ * one the start is never refused for being busy (a person's send). Either way
+ * the hold ends here.
  */
-export async function startTurn(container: TurnStartDeps, input: TurnInput): Promise<TurnResult> {
+export async function startTurn(container: TurnStartDeps, input: TurnInput, claim?: TurnClaim): Promise<TurnResult> {
+  const gate = container.turnGate;
+  const held = claim ?? gate?.hold(input.chatId);
+  try {
+    if (claim && gate && !gate.holdsAlone(claim)) throw new ChatBusyError();
+    return await startHeld(container, input);
+  } finally {
+    held?.release();
+  }
+}
+
+async function startHeld(container: TurnStartDeps, input: TurnInput): Promise<TurnResult> {
   // The chat isn't quiet any more (project memory, spec §2). Before run(), so a fast reply's new quiet timer is never cancelled.
   container.memory?.noteTurnStarted(input.chatId);
   let result: TurnResult;
@@ -75,26 +96,32 @@ export async function startSelfStartedTurn(container: TurnStartDeps & { resolveP
     start.decline();
     return;
   }
-  container.memory?.noteTurnStarted(chat.id);
-  // A reply that ended without running Claude Code's turn (its folder isn't on this machine, say) declines it, so the turn is read and dropped.
-  let ran = false;
-  const { assistantMessageId } = await container.turnRunner.runSelfStarted({
-    chatId: chat.id,
-    parentId: after.id,
-    profile,
-    notice: start.notice,
-    unattended: start.unattended,
-    unattendedAuto: start.unattendedAuto === true,
-    stream: (req) => {
-      ran = true;
-      return start.run(req);
-    },
-    onEnd: () => {
-      if (!ran) start.decline();
-    },
-  });
-  container.streamRegistry.registerTurn(chat.id, [assistantMessageId]);
-  container.events?.emit({ type: 'turn-started', chatId: chat.id, messageIds: [assistantMessageId], selfStarted: true });
+  // Claude Code is already running this turn, so it is never refused for a busy chat: held in the gate until it is announced.
+  const held = container.turnGate?.hold(chat.id);
+  try {
+    container.memory?.noteTurnStarted(chat.id);
+    // A reply that ended without running Claude Code's turn (its folder isn't on this machine, say) declines it, so the turn is read and dropped.
+    let ran = false;
+    const { assistantMessageId } = await container.turnRunner.runSelfStarted({
+      chatId: chat.id,
+      parentId: after.id,
+      profile,
+      notice: start.notice,
+      unattended: start.unattended,
+      unattendedAuto: start.unattendedAuto === true,
+      stream: (req) => {
+        ran = true;
+        return start.run(req);
+      },
+      onEnd: () => {
+        if (!ran) start.decline();
+      },
+    });
+    container.streamRegistry.registerTurn(chat.id, [assistantMessageId]);
+    container.events?.emit({ type: 'turn-started', chatId: chat.id, messageIds: [assistantMessageId], selfStarted: true });
+  } finally {
+    held?.release();
+  }
 }
 
 /** Whether the thread to `headId` has a context line (/clear, /compact) after message `afterId` on it. */

@@ -5,6 +5,7 @@ import type { ResolvedProfile } from '@otherbench/core/types/config.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { AppEventBus } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
+import { TurnGate } from '../src/turn-gate.js';
 import { startSelfStartedTurn, startTurn } from '../src/turn-start.js';
 import type { EngineEvent, EngineRequest, SelfStart } from '@otherbench/core/ports/chat-engine.js';
 
@@ -191,5 +192,30 @@ describe('startSelfStartedTurn', () => {
     const noReply = selfStart({ afterMessageId: 'missing' });
     await startSelfStartedTurn({ ...deps, resolveProfile: async () => profile() }, noReply);
     expect(noReply.declined()).toBe(true);
+  });
+
+  it('holds the chat in the turn gate while its reply is made, and lets go once it is announced or the start fails', async () => {
+    const { store, deps } = setup();
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const turnGate = new TurnGate(() => false);
+    const real = deps.turnRunner.runSelfStarted.bind(deps.turnRunner);
+    let go!: () => void;
+    const waited = new Promise<void>((resolve) => (go = resolve));
+    const slow = vi.spyOn(deps.turnRunner, 'runSelfStarted').mockImplementation(async (input) => {
+      await waited;
+      return real(input);
+    });
+
+    const started = startSelfStartedTurn({ ...deps, turnGate, resolveProfile: async () => profile() }, selfStart());
+    await vi.waitFor(() => expect(slow).toHaveBeenCalled());
+    expect(turnGate.isBusy('chat-1')).toBe(true);
+    expect(turnGate.claim('chat-1')).toBeNull();
+    go();
+    await started;
+    expect(turnGate.isBusy('chat-1')).toBe(false);
+
+    slow.mockRejectedValueOnce(new Error('store exploded'));
+    await expect(startSelfStartedTurn({ ...deps, turnGate, resolveProfile: async () => profile() }, selfStart())).rejects.toThrow('store exploded');
+    expect(turnGate.isBusy('chat-1')).toBe(false);
   });
 });

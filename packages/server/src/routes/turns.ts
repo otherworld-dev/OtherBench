@@ -323,17 +323,31 @@ export function turnsRoutes(container: Container): Hono {
     if (refusal) return refusal;
 
     const profile = await resolveProfile(container, message.producedBy.profileId);
-    // Reset the SSE buffer *before* kicking off the retry -- same
-    // before-any-event-can-arrive ordering `registerTurn` relies on for a
-    // fresh turn (see StreamRegistry.resetBuffer's doc).
-    container.memory?.noteTurnStarted(message.chatId);
-    container.streamRegistry.resetBuffer(message.chatId, messageId);
-    container.store.chats.update(message.chatId, { updatedAt: Date.now() });
-    container.events?.emit({ type: 'turn-started', chatId: message.chatId, messageIds: [messageId] });
-    void container.turnRunner.retry(message.chatId, messageId, profile).catch((err: unknown) => {
-      container.memory?.noteTurnCompleted(message.chatId);
-      console.error(`[otherbench-server] retry ${messageId} failed outside its own error handling:`, err);
-    });
+    // Looked at again now the profile has resolved: a second Retry of the same
+    // reply that got here first has it streaming already, and resetting its
+    // buffer below would drop what it has sent.
+    const now = container.store.messages.get(messageId);
+    if (now?.status !== 'error') {
+      throw new HTTPException(409, { message: `Message "${messageId}" is ${now?.status ?? 'gone'}; only an errored message can be retried.` });
+    }
+    // A retry is never refused for a busy chat (the other variants of its
+    // compare turn may still be streaming): held in the turn gate while it starts.
+    const held = container.turnGate?.hold(message.chatId);
+    try {
+      // Reset the SSE buffer *before* kicking off the retry -- same
+      // before-any-event-can-arrive ordering `registerTurn` relies on for a
+      // fresh turn (see StreamRegistry.resetBuffer's doc).
+      container.memory?.noteTurnStarted(message.chatId);
+      container.streamRegistry.resetBuffer(message.chatId, messageId);
+      container.store.chats.update(message.chatId, { updatedAt: Date.now() });
+      container.events?.emit({ type: 'turn-started', chatId: message.chatId, messageIds: [messageId] });
+      void container.turnRunner.retry(message.chatId, messageId, profile).catch((err: unknown) => {
+        container.memory?.noteTurnCompleted(message.chatId);
+        console.error(`[otherbench-server] retry ${messageId} failed outside its own error handling:`, err);
+      });
+    } finally {
+      held?.release();
+    }
 
     return c.json({ messageId }, 202);
   });
@@ -372,23 +386,29 @@ export function turnsRoutes(container: Container): Hono {
     if (!profileId) throw new HTTPException(400, { message: 'No profile to regenerate with; pass "profileId".' });
     const profile = await resolveProfile(container, profileId);
 
-    container.memory?.noteTurnStarted(chatId);
-    let result;
+    // A regenerate is never refused for a busy chat: held in the turn gate from here until it is announced.
+    const held = container.turnGate?.hold(chatId);
     try {
-      result = await container.turnRunner.regenerate({ chatId, messageId, profile });
-    } catch (err) {
-      container.memory?.noteTurnCompleted(chatId);
-      if (err instanceof RegenerateError) {
-        const status = err.code === 'not_found' ? 404 : err.code === 'streaming' || err.code === 'compare' ? 409 : 400;
-        throw new HTTPException(status, { message: err.message });
+      container.memory?.noteTurnStarted(chatId);
+      let result;
+      try {
+        result = await container.turnRunner.regenerate({ chatId, messageId, profile });
+      } catch (err) {
+        container.memory?.noteTurnCompleted(chatId);
+        if (err instanceof RegenerateError) {
+          const status = err.code === 'not_found' ? 404 : err.code === 'streaming' || err.code === 'compare' ? 409 : 400;
+          throw new HTTPException(status, { message: err.message });
+        }
+        throw err;
       }
-      throw err;
-    }
-    container.streamRegistry.registerTurn(chatId, [result.assistantMessageId]);
-    container.store.chats.update(chatId, { headMessageId: result.assistantMessageId, updatedAt: Date.now() });
-    container.events?.emit({ type: 'turn-started', chatId, messageIds: [result.assistantMessageId] });
+      container.streamRegistry.registerTurn(chatId, [result.assistantMessageId]);
+      container.store.chats.update(chatId, { headMessageId: result.assistantMessageId, updatedAt: Date.now() });
+      container.events?.emit({ type: 'turn-started', chatId, messageIds: [result.assistantMessageId] });
 
-    return c.json(result, 202);
+      return c.json(result, 202);
+    } finally {
+      held?.release();
+    }
   });
 
   app.post('/chats/:id/head', async (c) => {

@@ -12,6 +12,7 @@ import { formatInZone } from '@otherbench/core/domain/schedule.js';
 import { ScheduleService, type ScheduleLimits } from '../../src/schedule/service.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
+import { TurnGate } from '../../src/turn-gate.js';
 import { startTurn } from '../../src/turn-start.js';
 import { workspaceResolver } from '../../src/workspace-view.js';
 
@@ -31,9 +32,11 @@ function setup(limits?: Partial<ScheduleLimits>): void {
   const turnRunner = new TurnRunner(store, hangingEngine);
   const events = new AppEventBus();
   events.attach(turnRunner, store);
+  const turnGate = new TurnGate((chatId) => events.runningTurns().some((t) => t.chatId === chatId));
   container = {
     store,
     events,
+    turnGate,
     secrets: new FakeSecretStore(),
     engine: hangingEngine,
     registry: {} as never,
@@ -47,10 +50,10 @@ function setup(limits?: Partial<ScheduleLimits>): void {
   container.schedules = new ScheduleService({
     store,
     turnRunner,
-    startTurn: (input) => startTurn(container, input),
+    startTurn: (input, claim) => startTurn(container, input, claim),
     resolveProfile: (id) => resolveProfile(container, id),
     resolveWorkspace: (ws) => workspaceResolver(container)(ws),
-    isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
+    gate: turnGate,
     emit: (e) => events.emit(e),
     ...(limits ? { limits } : {}),
   });

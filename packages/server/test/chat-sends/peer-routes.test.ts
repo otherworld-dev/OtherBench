@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnRunner } from '@otherbench/core/domain/turn.js';
 import { FakeSecretStore, InMemoryStore } from '@otherbench/core/testing/fakes.js';
 import type { ChatEngine } from '@otherbench/core/ports/chat-engine.js';
+import { TurnGate } from '../../src/turn-gate.js';
 import { ChatSendService } from '../../src/chat-sends/service.js';
 import type { Container } from '../../src/container.js';
 import { forwardedApi, PeerInfluence } from '../../src/peer/forward.js';
@@ -51,7 +52,7 @@ beforeEach(() => {
       throw new Error('no profiles here');
     },
     resolveWorkspace: () => ({ status: 'none' }),
-    isChatBusy: () => false,
+    gate: new TurnGate(() => false),
     createAppChat: () => {
       throw new Error('no apps here');
     },
