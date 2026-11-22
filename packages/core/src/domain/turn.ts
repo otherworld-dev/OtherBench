@@ -75,6 +75,7 @@ export class TurnRunner {
   private readonly saveToolImage?: SaveToolImage;
   private readonly claudeAccountFor?: (chatId: string, profile: ResolvedProfile) => ClaudeAccountRef | undefined;
   private readonly jobFolderFor?: (chatId: string) => string | null;
+  private readonly jobAppContextFor?: (chatId: string) => boolean;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
   /** messageId -> the notice `cancel` was given, for the reply to end with (a scheduled run's time limit). */
@@ -106,6 +107,7 @@ export class TurnRunner {
     this.saveToolImage = options.saveToolImage;
     this.claudeAccountFor = options.claudeAccountFor;
     this.jobFolderFor = options.jobFolderFor;
+    this.jobAppContextFor = options.jobAppContextFor;
     this.prompts = new TurnPromptBuilder(store, this.now, this.canonicalPath);
     this.toolProvider?.onApprovalEvent((event) => {
       switch (event.type) {
@@ -133,6 +135,16 @@ export class TurnRunner {
    * that fails counts as a job chat with no folder (''), which then refuses to
    * run: a job chat must never run as an ordinary one because a read failed.
    */
+  /** Whether a job chat's prompt gets its app's knowledge. A lookup that fails counts as no. */
+  private jobAppContextOf(chatId: string): boolean {
+    try {
+      return this.jobAppContextFor?.(chatId) === true;
+    } catch (err) {
+      console.error(`[TurnRunner] could not tell whether job chat ${chatId} gets its app's knowledge:`, err);
+      return false;
+    }
+  }
+
   private jobFolderOf(chatId: string): string | null {
     if (!this.jobFolderFor) return null;
     try {
@@ -607,8 +619,9 @@ export class TurnRunner {
       const canRecall = tools.some((t) => t.source === 'recall');
       const prompts = this.prompts;
       // A job chat can sit in an app (so the Code tab lists it there), but its prompt gets none of the app's notes or
-      // its linked project's instructions and memory: they are the user's own, and a job's brief is untrusted.
-      const promptChat = job ? null : chat;
+      // its linked project's instructions and memory: they are the user's own, and a job's brief is untrusted. Only a
+      // job chat made with its app's knowledge gets them (the job profile still keeps global memory out).
+      const promptChat = job && !this.jobAppContextOf(chatId) ? null : chat;
       const requestProfile = prompts.withRecall(
         prompts.withArtifacts(prompts.withTools(prompts.withSandbox(prompts.withFolders(prompts.withAppNotes(prompts.withProjectMemory(prompts.withProjectInstructions(prompts.withGlobalMemory(profile, promptChat, canRecall), promptChat), promptChat), promptChat), folders), workspaceRoot, folders), tools), tools),
         canRecall

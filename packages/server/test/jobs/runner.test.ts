@@ -63,6 +63,17 @@ describe('JobRunner', () => {
     expect(store.chats.list()).toHaveLength(1);
   });
 
+  it("createChat records a chat made with its app's knowledge, and refuses that for a chat with no app", () => {
+    const { store, runner } = setup();
+    store.apps.create({ id: 'app-1', name: 'Shop' });
+    const plain = runner.createChat({ title: 'Job', folder: FOLDER, profileId: 'p1', appId: 'app-1' });
+    const knowing = runner.createChat({ title: 'Job', folder: FOLDER, profileId: 'p1', appId: 'app-1', appContext: true });
+    expect(store.jobChats.appContextFor(plain.chatId)).toBe(false);
+    expect(store.jobChats.appContextFor(knowing.chatId)).toBe(true);
+    expect(() => runner.createChat({ title: 'Job', folder: FOLDER, profileId: 'p1', appContext: true })).toThrow(/app/);
+    expect(store.chats.list()).toHaveLength(2);
+  });
+
   it("createChat refuses a folder that isn't a job's clone: relative, missing, without a plain .git, or the home folder or one above it", () => {
     const { store, runner } = setup();
     const noGit = join(ROOT, 'no-git');

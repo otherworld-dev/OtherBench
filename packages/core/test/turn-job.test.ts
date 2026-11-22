@@ -132,6 +132,46 @@ describe('TurnRunner in a job chat', () => {
     for (const secret of ['APP-NOTE', 'PROJECT-INSTRUCTIONS', 'PROJECT-MEMORY']) expect(sent).not.toContain(secret);
   });
 
+  /** A job chat in an app with notes and a linked project, and a global note. */
+  function knowingStore(): InMemoryStore {
+    const store = new InMemoryStore();
+    store.projects.create({ id: 'proj', name: 'Shop', workspaceRoot: null, defaultProfileId: null, instructions: 'PROJECT-INSTRUCTIONS' });
+    store.projectMemory.save('proj', 'PROJECT-MEMORY', 'user', null);
+    store.apps.create({ id: 'app-1', name: 'Shop', linkedProjectId: 'proj' });
+    store.appNotes.save('app-1', '## Gotchas\n- APP-NOTE', null, 1);
+    store.globalMemory.saveNote('GLOBAL-NOTE', 'user', null);
+    jobChat(store, jobDir, { appId: 'app-1', projectId: null });
+    return store;
+  }
+
+  async function sentBy(store: InMemoryStore, jobAppContextFor: (chatId: string) => boolean): Promise<string> {
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { jobFolderFor: () => jobDir, jobAppContextFor });
+    await runner.run({ chatId: 'job-chat', parentId: null, userParts: [{ type: 'text', text: 'go' }], profiles: [wideProfile()] });
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    const req = engine.requests[0]!;
+    // Still a job in every other way.
+    expect(req.job).toBe(true);
+    expect(req.profile.toolPolicy).toEqual(jobPolicy());
+    return JSON.stringify([req.profile.systemPrompt, req.messages]);
+  }
+
+  it("gives a job chat made with its app's knowledge the app's notes and linked project, never global memory or the profile's prompt", async () => {
+    const sent = await sentBy(knowingStore(), () => true);
+    for (const known of ['APP-NOTE', 'PROJECT-INSTRUCTIONS', 'PROJECT-MEMORY']) expect(sent).toContain(known);
+    expect(sent).not.toContain('GLOBAL-NOTE');
+    expect(sent).not.toContain('Push to GitHub when done.');
+  });
+
+  it("gives a job chat nothing of its app's when the lookup says no, or fails", async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (const lookup of [() => false, () => { throw new Error('database is locked'); }]) {
+      const sent = await sentBy(knowingStore(), lookup);
+      for (const known of ['APP-NOTE', 'PROJECT-INSTRUCTIONS', 'PROJECT-MEMORY', 'GLOBAL-NOTE']) expect(sent).not.toContain(known);
+    }
+    errors.mockRestore();
+  });
+
   it('leaves every other chat alone', async () => {
     const store = new InMemoryStore();
     jobChat(store, jobDir);
