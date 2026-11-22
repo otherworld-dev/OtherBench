@@ -289,6 +289,14 @@ describe('tool-progress', () => {
   });
 });
 
+describe('history-summary', () => {
+  it('reducer appends the part the server stored', () => {
+    const part = { type: 'history-summary' as const, uptoMessageId: 'a4', covered: 'hash', text: 'What came before.' };
+    const { message } = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'history-summary', part });
+    expect(message.parts).toEqual([part]);
+  });
+});
+
 describe('user-note', () => {
   it('reducer appends a user-note part', () => {
     const part = { type: 'user-note' as const, noteId: 'n1', text: 'also this', attachments: [] };

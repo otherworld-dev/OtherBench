@@ -24,6 +24,8 @@ import { bindToolImages, keepToolImages, MAX_TOOL_IMAGE_BYTES, toolImageBound, t
 import { attachmentIdsIn, degradedAttachmentsNotice, degradeImagesForVision, filesForModel, unreadFilesNotice } from './turn-attachments.js';
 import { ClaudeAccountUnavailableError, InvalidAttachmentReferenceError, RegenerateError, WorkspaceUnresolvedError } from './turn-errors.js';
 import { TurnPromptBuilder } from './turn-prompt.js';
+import { openHistoryView, retryOnOverflow } from './turn-history.js';
+import type { HistorySummaryPart } from './history-summary.js';
 import type { TurnEvent, TurnInput, TurnResult, TurnRunnerOptions } from './turn-types.js';
 
 // `appendDelta` lives in parts.ts now (the web folds with it too); kept exported here for peer/forward.ts.
@@ -707,6 +709,8 @@ export class TurnRunner {
       // (`parts`/`checkpoint`) has no such race -- a direct store write, not
       // a broadcast -- so that part happens right away regardless.
       let pendingNoticeText: string | null = null;
+      // A summary made for this request, to send live with the notice (same race, same fix).
+      let pendingSummary: HistorySummaryPart | null = null;
       const notices = [
         ...(variant.notice ? [variant.notice] : []),
         ...(degraded.length > 0 ? [degradedAttachmentsNotice(degraded, profile.modelId)] : []),
@@ -751,9 +755,26 @@ export class TurnRunner {
         });
       }
 
-      const request: EngineRequest = {
-        profile: requestProfile,
-        messages: requestMessages,
+      // A chat on a model API sends its whole path every turn, so a long one outgrows the model's context
+      // window. Its oldest messages are swapped, in the request only, for a summary
+      // (docs/features/history-summary.md). Claude Code compacts for itself, and a handover or a reply
+      // the engine started is its own session's business: none of them is touched.
+      const view =
+        profile.connection.kind !== 'claude_code' && !variant.stream && !handover
+          ? openHistoryView(this.store, this.engine, this.now, this.generateId, { chatId, messageId, userMessageId, profile, requestProfile, messages: requestMessages, tools, signal: controller.signal })
+          : null;
+      // The summary is kept as a part of this reply: the next turn on this path finds it there, and the thread draws its line from it.
+      const keepSummary = (part: HistorySummaryPart | null): boolean => {
+        if (part === null) return false;
+        parts = [...parts, part];
+        checkpoint(true);
+        pendingSummary = part;
+        return true;
+      };
+      if (view) keepSummary(await view.fitWindow());
+
+      const buildRequest = (): EngineRequest => ({
+        ...(view ? view.request() : { profile: requestProfile, messages: requestMessages }),
         tools,
         signal: controller.signal,
         chatId,
@@ -777,9 +798,13 @@ export class TurnRunner {
         ...(plan ? { plan } : {}),
         ...(handover ? { handover: true } : {}),
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
-      };
+      });
+      const request = buildRequest();
+      const firstStream = variant.stream ? variant.stream(request) : this.engine.stream(request);
+      // Refused as too long (the window wasn't known, or the estimate was wrong): summarise and send it once more.
+      const events = view ? retryOnOverflow(firstStream, async () => (keepSummary(await view.afterOverflow()) ? this.engine.stream(buildRequest()) : null)) : firstStream;
 
-      for await (const event of variant.stream ? variant.stream(request) : this.engine.stream(request)) {
+      for await (const event of events) {
         if (pendingNoticeText !== null) {
           // Fired on this variant's FIRST live-emitted event, not
           // immediately after computing it above. `runVariant` reaches the
@@ -804,6 +829,10 @@ export class TurnRunner {
           // they could not have caught it.
           this.emit({ messageId, type: 'notice', text: pendingNoticeText });
           pendingNoticeText = null;
+        }
+        if (pendingSummary !== null) {
+          this.emit({ messageId, type: 'history-summary', part: pendingSummary });
+          pendingSummary = null;
         }
         if (event.type === 'engine-meta') {
           // Engine-owned state, persisted straight away (a cancelled turn

@@ -49,6 +49,7 @@ setup have their own pages (see Where to look).
 - [Claude accounts](features/claude-accounts.md)
 - [App notes](features/app-notes.md)
 - [Fresh chat handover](features/fresh-chat-handover.md)
+- [History summary](features/history-summary.md)
 - [Chats that message each other](features/chat-messages.md)
 - [Chat status: done, or what's left](features/chat-status.md)
 - [Job chats: unattended work under fixed rules](features/jobs.md)
@@ -356,6 +357,18 @@ and the gate then approves, so read the note of any project where that
 combination is on, and edit out anything you didn't write or expect. The memory
 model also reads each project's chats, which is why Settings says to pick one
 you are happy to send that content to.
+
+**A long chat's history summary is the same kind of channel, inside one
+chat.** On a model API, the oldest messages of a long chat reach the model as
+a summary the chat's own model wrote (`docs/features/history-summary.md`), so
+an injection in an old message could be carried forward in it after the
+message itself is no longer sent. It gets project memory's mitigations: the
+summary is framed as untrusted background inside `<conversation-summary>`
+tags with any closing tag defused, and the summarising call is told to record
+facts and results, never to copy instructions, and never to record that
+anything was approved. It grants nothing: the call has no tools, and every
+tool call still goes through `PermissionBroker`. Read the summary from the
+line it leaves in the thread (Show summary).
 
 **Grants are default-deny, per profile, with per-command approval.**
 `packages/core/src/domain/permissions.ts`'s `PermissionBroker` is the single

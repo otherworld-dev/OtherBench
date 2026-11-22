@@ -47,5 +47,6 @@ export function recordUsage(store: Pick<Store, 'models' | 'usage'>, w: UsageWrit
     latencyMs: w.latencyMs,
     ...(w.subagentCallId ? { subagentCallId: w.subagentCallId } : {}),
     ...(w.purpose ? { purpose: w.purpose } : {}),
+    ...(typeof w.usage.contextTokens === 'number' ? { contextTokens: w.usage.contextTokens } : {}),
   });
 }

@@ -403,6 +403,9 @@ function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element
       return <NoticeBlock key={key} text={part.text} />;
     case 'context-summary':
       return <ContextSummaryBlock key={key} part={part} />;
+    case 'history-summary':
+      // Drawn by the thread at the message the summary reaches (HistorySummaryLine), not in the reply that carries it.
+      return null;
     case 'handover':
       return <HandoverLink key={key} part={part} />;
     case 'user-note':
