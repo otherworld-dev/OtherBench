@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve as nodeServe } from '@hono/node-server';
 import type { ComputerDriver } from '@otherbench/core/ports/computer.js';
+import { addonDisposeBudgetMs, type LoadedAddon } from './addons/loader.js';
 import { createApp } from './app.js';
 import { DesktopChannel } from './computer/desktop-channel.js';
 import { DesktopComputerDriver } from './computer/desktop-driver.js';
@@ -36,9 +37,20 @@ const DEFAULT_HOST = '127.0.0.1';
 /**
  * How long an announce-mode shutdown waits for the container's background work (the sandbox closing its agents
  * and taking its folders down in the VM) before exiting anyway. Under the desktop shell's 3 s grace
- * (desktop/src-tauri/src/sidecar.rs), after which it kills the server.
+ * (desktop/src-tauri/src/sidecar.rs), after which it kills the server. Add-ons with a dispose are stopped before
+ * anything else closes, so the time they may take is added to it (`shutdownWaitMs`).
  */
 export const SHUTDOWN_WAIT_MS = 2500;
+
+/**
+ * How long an announce-mode shutdown waits before exiting anyway: every add-on's dispose may use its whole limit
+ * before the close proper starts (the database, the Claude Code processes, the sandbox, the terminals), and exiting
+ * before that would skip it. Still bounded, and with no add-on to stop it is `SHUTDOWN_WAIT_MS` as before. With one,
+ * it can be longer than the desktop shell's grace: the shell's kill is then what ends a server whose add-on hangs.
+ */
+export function shutdownWaitMs(addons: readonly LoadedAddon[] = []): number {
+  return addonDisposeBudgetMs(addons) + SHUTDOWN_WAIT_MS;
+}
 
 function defaultDbPath(): string {
   return join(homedir(), DATA_DIR, DB_NAME);
@@ -494,11 +506,13 @@ export async function runServe(
   if (options.announce) {
     stdout.write(announceLine(boundPort, rpcWord));
     exitOnStdinClose(stdin, () => {
+      // Read before the close: which add-ons have a dispose to wait for.
+      const wait = shutdownWaitMs(container.addons);
       close();
       // Exiting at once would leave the sandbox's folders mounted in the VM (and undeletable on Windows) until WSL stops it.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const waited = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, SHUTDOWN_WAIT_MS);
+        timer = setTimeout(resolve, wait);
       });
       void Promise.race([container.settled?.() ?? Promise.resolve(), waited]).then(() => {
         clearTimeout(timer);

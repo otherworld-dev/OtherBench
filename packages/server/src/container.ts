@@ -371,8 +371,9 @@ export async function resolveSecretsPassphrase(secretsPath: string, given?: stri
  * Opens (migrating if needed) the real SQLite-backed `Container` the CLI
  * serves from, holding the database lock (db-lock.ts) for its whole life:
  * taken before anything reads the store -- in particular before
- * `reconcileInterruptedTurns` -- and released by `close()`, or straight
- * away if startup fails part-way.
+ * `reconcileInterruptedTurns` -- and released once `close()` has closed the
+ * database (which, with an add-on to stop first, is after `close()` returns),
+ * or straight away if startup fails part-way.
  */
 /** The desktop shell's version when it started this server; otherwise this package's (a checkout run). */
 function appVersion(): string {
@@ -391,22 +392,17 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
     await mkdir(dirname(options.dbPath), { recursive: true });
   }
   const lock = acquireDbLock(options.dbPath);
-  let container: Container;
   try {
-    container = await openContainer(options);
+    // The lock goes when the database has closed, never before: another server let in while this one still has it
+    // open would take its unfinished replies for abandoned ones (db-lock.ts).
+    return await openContainer(options, () => lock?.release());
   } catch (err) {
     lock?.release();
     throw err;
   }
-  const closeContainer = container.close;
-  container.close = () => {
-    closeContainer();
-    lock?.release();
-  };
-  return container;
 }
 
-async function openContainer(options: ContainerOptions): Promise<Container> {
+async function openContainer(options: ContainerOptions, onStoreClosed: () => void): Promise<Container> {
   const db = openDatabase(options.dbPath);
   // An update that brings a migration leaves the old database beside the new one (throws, so nothing migrates, if it can't).
   try {
@@ -755,6 +751,17 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
 
   // The daily abandoned-attachment sweep, started once the notes service exists.
   let abandonedSweep: AbandonedSweeper | null = null;
+  // The database closes once, and whoever holds its lock is told as soon as it has (or has failed to).
+  let storeClosed = false;
+  const closeStore = (): void => {
+    if (storeClosed) return;
+    storeClosed = true;
+    try {
+      store.close();
+    } finally {
+      onStoreClosed();
+    }
+  };
   // What close() set going without waiting, for settled().
   let sandboxClosed: Promise<void> = Promise.resolve();
   let terminalsClosed: Promise<void> = Promise.resolve();
@@ -811,7 +818,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       engine.dispose();
       // The sandbox's agents and mounts. Not awaited, like the tool provider below (settled() waits for it). Before the store closes: it may still write its state.
       sandboxClosed = sandbox.close().catch((err: unknown) => console.error('[otherbench-server] error closing the sandbox:', err));
-      store.close();
+      closeStore();
       // Best-effort, not awaited: `close()` is a synchronous port method
       // used throughout the test suite without an await, and disconnecting
       // MCP clients is cleanup, not something anything downstream of
@@ -1035,13 +1042,24 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const closeBeforeAddons = container.close;
   const settledBeforeAddons = container.settled;
   let addonsStopped: Promise<void> = Promise.resolve();
+  // A step of the close that throws must not leave the database open with its lock held: it closes whatever happened.
+  const closeAll = (): void => {
+    try {
+      closeBeforeAddons();
+    } finally {
+      closeStore();
+    }
+  };
   container.close = () => {
     const stopping = container.addons?.filter((a) => a.status === 'loaded' && a.module?.dispose) ?? [];
     if (stopping.length === 0) {
-      closeBeforeAddons();
+      closeAll();
       return;
     }
-    addonsStopped = disposeAddons(stopping).then(() => closeBeforeAddons());
+    // Nobody is left to catch a throw from here, and settled() never rejects: it is logged.
+    addonsStopped = disposeAddons(stopping)
+      .then(closeAll)
+      .catch((err: unknown) => console.error('[otherbench-server] error closing after the add-ons stopped:', err));
   };
   container.settled = () => addonsStopped.then(() => settledBeforeAddons?.());
 

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -57,6 +57,53 @@ export async function dispose() {
     container.close();
     await container.settled?.();
     expect(saw).toEqual([{ apps: [] }]);
+  });
+
+  it("keep the database's lock until the database has closed, which is after an add-on's dispose", async () => {
+    const folder = join(dir, 'addons', 'probe');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, 'addon.json'), JSON.stringify({ id: 'probe', name: 'Probe', version: '0.0.1', apiVersion: 1, main: 'main.mjs' }));
+    writeFileSync(
+      join(folder, 'main.mjs'),
+      `export function activate() {}
+export async function dispose() { await new Promise((r) => setTimeout(r, 30)); }`
+    );
+    const dbPath = join(dir, 'otherbench.db');
+    const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
+    container.close();
+    // The add-on is still stopping, so the database is still open: another server must not be let in yet.
+    expect(container.store.chats.list()).toEqual([]);
+    expect(existsSync(`${dbPath}.lock`)).toBe(true);
+    await container.settled?.();
+    expect(() => container.store.chats.list()).toThrow();
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
+  });
+
+  it('close the database and release its lock even when a step of the close throws', async () => {
+    const dbPath = join(dir, 'otherbench.db');
+    const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
+    container.schedules!.dispose = () => {
+      throw new Error('the scheduler would not stop');
+    };
+    expect(() => container.close()).toThrow('the scheduler would not stop');
+    expect(() => container.store.chats.list()).toThrow();
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
+  });
+
+  it("close the database after an add-on's dispose even when a step of the close throws, and settle without rejecting", async () => {
+    const folder = join(dir, 'addons', 'probe');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, 'addon.json'), JSON.stringify({ id: 'probe', name: 'Probe', version: '0.0.1', apiVersion: 1, main: 'main.mjs' }));
+    writeFileSync(join(folder, 'main.mjs'), 'export function activate() {}\nexport async function dispose() {}');
+    const dbPath = join(dir, 'otherbench.db');
+    const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
+    container.schedules!.dispose = () => {
+      throw new Error('the scheduler would not stop');
+    };
+    container.close();
+    await expect(container.settled!()).resolves.toBeUndefined();
+    expect(() => container.store.chats.list()).toThrow();
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
   });
 
   it('start fine with no addons folder', async () => {
