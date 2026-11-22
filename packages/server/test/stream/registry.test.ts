@@ -6,6 +6,7 @@ import type { ToolApprovalEvent, ToolProvider } from '@otherbench/core/ports/too
 import type { Connection, ModelInfo, ResolvedProfile } from '@otherbench/core/types/config.js';
 import { applySubagentEvent, type SubagentEvent } from '@otherbench/core/domain/parts.js';
 import type { Part } from '@otherbench/core/types/messages.js';
+import { withEvent } from '../../src/peer/forward.js';
 import { StreamRegistry, type ChatStreamEvent } from '../../src/stream/registry.js';
 
 // ---------------------------------------------------------------------------
@@ -221,7 +222,8 @@ describe('StreamRegistry', () => {
 
     const combined = [...replay, ...live];
     const textDeltas = combined.filter((e): e is TurnEvent & { type: 'text-delta' } => e.type === 'text-delta');
-    expect(textDeltas.map((e) => e.text)).toEqual(['First ', 'second ', 'third']);
+    // The replay holds the two it missed as one delta (a run of text is kept joined): the same text, in order.
+    expect(textDeltas.map((e) => e.text)).toEqual(['First second ', 'third']);
     // No duplication: the two events already in the replay must not also
     // appear in what the live subscription delivered.
     expect(live.filter((e) => e.type === 'text-delta')).toHaveLength(1);
@@ -293,7 +295,7 @@ describe('StreamRegistry', () => {
     expect(store.messages.get(messageId)?.status).toBe('complete');
   });
 
-  it('falls back to the persisted message row when the in-memory log is lost (e.g. a server restart mid-turn), with a correct terminal status and no duplicated content', async () => {
+  it('leaves a finished reply to the stored messages when the in-memory log is lost (a server restart), and still gives one the store says is being written', async () => {
     const store = new InMemoryStore();
     const { engine, push } = manualEngine();
     const runner = new TurnRunner(store, engine);
@@ -315,26 +317,64 @@ describe('StreamRegistry', () => {
     push(messageId, FINISH);
     await flush();
 
-    // Simulate a server restart: a brand-new registry over the SAME store,
-    // with no subscription history and therefore no in-memory buffer at all
-    // for this message id.
-    const freshRunner = new TurnRunner(store, engine);
-    const freshRegistry = new StreamRegistry(freshRunner, store);
+    // Simulate a server restart: a brand-new registry over the SAME store, with no buffer for this message id.
+    const freshRegistry = new StreamRegistry(new TurnRunner(store, engine), store);
+    // The reply is finished and stored: `GET /chats/:id/messages` has all of it, so the hello says nothing of it.
+    expect(freshRegistry.snapshot('chat-1')).toEqual([]);
 
-    const snapshot = freshRegistry.snapshot('chat-1');
-    const buffer = snapshot.find((b) => b.messageId === messageId);
-    expect(buffer).toBeDefined();
-    // The row's current (terminal) status, not a stuck 'streaming'.
-    expect(buffer?.status).toBe('complete');
+    // A row still marked as being written, with no buffer (nothing does this today: startup closes such rows): the
+    // hello still says so, from its last checkpoint, rather than leave a client showing it with no way to hear more.
+    store.messages.create({ id: 'stuck', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [{ type: 'text', text: 'Half' }], status: 'streaming', error: null, producedBy: null });
+    expect(freshRegistry.snapshot('chat-1')).toEqual([
+      { chatId: 'chat-1', messageId: 'stuck', status: 'streaming', events: [{ messageId: 'stuck', type: 'text-delta', text: 'Half' }, { messageId: 'stuck', type: 'status', status: 'streaming' }] },
+    ]);
+  });
 
-    // Replaying the reconstructed events reproduces exactly the checkpointed
-    // content -- no gap, no duplication -- the same property the in-memory
-    // path already satisfies (see the "no gap and no duplication" test
-    // above).
-    const textDeltas = buffer!.events.filter(
-      (e): e is TurnEvent & { type: 'text-delta' } => e.type === 'text-delta'
-    );
-    expect(textDeltas.map((e) => e.text).join('')).toBe('Hello world');
+  it("the hello holds the chat's replies being written and those just finished, never its history", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new InMemoryStore();
+      const { engine, push } = manualEngine();
+      const runner = new TurnRunner(store, engine);
+      const registry = new StreamRegistry(runner, store, { retentionMs: 60_000 });
+      const reply = async (chatId: string, parentId: string | null): Promise<string> => {
+        const result = await runner.run({ chatId, parentId, userParts: [{ type: 'text', text: 'Hi' }], profiles: [makeResolvedProfile()] });
+        registry.registerTurn(chatId, result.assistantMessageIds);
+        return result.assistantMessageIds[0] as string;
+      };
+      const finish = async (id: string, text: string): Promise<void> => {
+        push(id, { type: 'text-delta', text });
+        await vi.advanceTimersByTimeAsync(0);
+        push(id, FINISH);
+        await vi.advanceTimersByTimeAsync(0);
+      };
+
+      // Long finished: out of the buffer's keeping.
+      const old = await reply('chat-1', null);
+      await finish(old, 'An old answer.');
+      await vi.advanceTimersByTimeAsync(61_000);
+      // Just finished: a client that loaded the messages a moment ago may have it as still being written.
+      const recent = await reply('chat-1', old);
+      await finish(recent, 'A fresh answer.');
+      // Being written.
+      const writing = await reply('chat-1', recent);
+      push(writing, { type: 'text-delta', text: 'So far' });
+      await vi.advanceTimersByTimeAsync(0);
+      // Another chat's reply is its own chat's business.
+      const elsewhere = await reply('chat-2', null);
+
+      const hello = registry.snapshot('chat-1');
+      expect(hello.map((b) => [b.messageId, b.status])).toEqual([[recent, 'complete'], [writing, 'streaming']]);
+      expect(hello.map((b) => b.messageId)).not.toContain(old);
+      expect(hello.map((b) => b.messageId)).not.toContain(elsewhere);
+      // Each is whole: replaying the finished one gives the reply as stored, and the other all of it so far
+      // (its row only has its last checkpoint).
+      expect(hello[0]!.events.reduce(withEvent, [])).toEqual(store.messages.get(recent)!.parts);
+      expect(hello[1]!.events.reduce(withEvent, [])).toEqual([{ type: 'text', text: 'So far' }]);
+      expect(store.messages.get(old)).toMatchObject({ status: 'complete', parts: [{ type: 'text', text: 'An old answer.' }] });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reconstructs a notice event (task 21 capability-fallback disclosure) from a persisted notice part -- not silently dropped in the DB-fallback path', () => {
@@ -352,7 +392,7 @@ describe('StreamRegistry', () => {
         { type: 'notice', text: '1 image attachment ("photo.png") sent as text because this model does not support image input.' },
         { type: 'text', text: 'Based on the description, it looks like a sunset.' },
       ],
-      status: 'complete',
+      status: 'streaming',
       error: null,
       producedBy: null,
     });
@@ -377,7 +417,7 @@ describe('StreamRegistry', () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     store.messages.create({
-      id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null,
+      id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'streaming', error: null, producedBy: null,
       parts: [{ type: 'context-summary', text: 'S', preTokens: 100, postTokens: 10 }],
     });
     const { engine } = manualEngine();
@@ -392,7 +432,7 @@ describe('StreamRegistry', () => {
     store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     const note: Part = { type: 'user-note', noteId: 'note-1', text: 'also check the tests', attachments: [{ attachmentId: 'att-1', mime: 'image/png', filename: 'shot.png' }] };
     store.messages.create({
-      id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null,
+      id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'streaming', error: null, producedBy: null,
       parts: [{ type: 'text', text: 'Looking.' }, note, { type: 'text', text: 'Checked them too.' }],
     });
     const { engine } = manualEngine();
@@ -403,7 +443,7 @@ describe('StreamRegistry', () => {
       { messageId: 'assistant-1', type: 'text-delta', text: 'Looking.' },
       { messageId: 'assistant-1', type: 'user-note', part: note },
       { messageId: 'assistant-1', type: 'text-delta', text: 'Checked them too.' },
-      { messageId: 'assistant-1', type: 'status', status: 'complete' },
+      { messageId: 'assistant-1', type: 'status', status: 'streaming' },
     ]);
   });
 
@@ -415,7 +455,7 @@ describe('StreamRegistry', () => {
       usage: { tokensIn: 3, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 },
       parts: [{ type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a' } }, { type: 'text', text: 'Found.' }],
     };
-    store.messages.create({ id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [{ type: 'text', text: 'Asking.' }, part], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [{ type: 'text', text: 'Asking.' }, part], status: 'streaming', error: null, producedBy: null });
     const { engine } = manualEngine();
     const registry = new StreamRegistry(new TurnRunner(store, engine), store);
 
@@ -510,7 +550,7 @@ describe('StreamRegistry', () => {
     expect(snapshot[0]?.status).toBe('streaming');
   });
 
-  it('evicts a completed buffer from memory after the retention window; snapshot() still reflects it correctly via the DB fallback', async () => {
+  it('evicts a completed buffer from memory after the retention window; the hello then leaves it to the stored messages', async () => {
     vi.useFakeTimers();
     try {
       const store = new InMemoryStore();
@@ -538,17 +578,10 @@ describe('StreamRegistry', () => {
       expect(registry.snapshot('chat-1')).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(2_000);
-      // The in-memory buffer is now evicted (bounding memory is still the
-      // retention window's job) -- but the persisted row is still
-      // 'complete', so snapshot() falls back to it (see IMPORTANT 4, task
-      // 16-18 report) rather than reporting nothing. Its events are
-      // reconstructed from the row, not the original live history, so there
-      // is no `finish` event in it -- proof this came from the DB fallback,
-      // not a buffer that (bug) never actually got evicted.
-      const afterEviction = registry.snapshot('chat-1');
-      expect(afterEviction).toHaveLength(1);
-      expect(afterEviction[0]?.status).toBe('complete');
-      expect(afterEviction[0]?.events.map((e) => e.type)).not.toContain('finish');
+      // The in-memory buffer is now evicted (bounding memory is the retention window's job), and a finished
+      // reply isn't rebuilt from its row: the stored messages are where a client reads it from now on.
+      expect(registry.snapshot('chat-1')).toEqual([]);
+      expect(store.messages.get(messageId)?.status).toBe('complete');
     } finally {
       vi.useRealTimers();
     }
@@ -695,6 +728,70 @@ describe('StreamRegistry and background work (spec 2026-10-17-claude-background-
     const { registry, got } = setup();
     registry.messagesChanged('c1');
     expect(got).toEqual([{ type: 'messages-changed', chatId: 'c1' }]);
+  });
+});
+
+describe('StreamRegistry and runs of text', () => {
+  function emitter(): { registry: StreamRegistry; emit: (event: TurnEvent) => void; live: ChatStreamEvent[] } {
+    let emit: ((event: TurnEvent) => void) | null = null;
+    const runner = { on: (cb: (event: TurnEvent) => void) => { emit = cb; return () => {}; } } as unknown as TurnRunner;
+    const registry = new StreamRegistry(runner, new InMemoryStore());
+    registry.registerTurn('c1', ['m1', 'm2']);
+    const live: ChatStreamEvent[] = [];
+    registry.subscribe('c1', (e) => live.push(e));
+    return { registry, emit: (event) => emit!(event), live };
+  }
+
+  it('keeps a run of text deltas, and of reasoning deltas, as one in the buffer, and the replay folds to the same parts', () => {
+    const { registry, emit, live } = emitter();
+    const sent: TurnEvent[] = [
+      { messageId: 'm1', type: 'reasoning-delta', text: 'Let me ' },
+      { messageId: 'm1', type: 'reasoning-delta', text: 'think.' },
+      { messageId: 'm1', type: 'text-delta', text: 'One ' },
+      { messageId: 'm1', type: 'text-delta', text: 'two ' },
+      { messageId: 'm1', type: 'text-delta', text: 'three.' },
+      { messageId: 'm1', type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a' } },
+      { messageId: 'm1', type: 'tool-result', id: 't1', name: 'read_file', result: 'x', isError: false },
+      { messageId: 'm1', type: 'text-delta', text: 'After ' },
+      { messageId: 'm1', type: 'text-delta', text: 'the tool.' },
+      { messageId: 'm1', type: 'notice', text: 'A notice.' },
+      { messageId: 'm1', type: 'text-delta', text: '' },
+      { messageId: 'm1', type: 'text-delta', text: 'End.' },
+    ];
+    const copies = structuredClone(sent);
+    for (const event of sent) emit(event);
+
+    // Every delta still goes out live, as it was sent: joining is the buffer's business only.
+    expect(live).toEqual(copies);
+    expect(sent).toEqual(copies);
+    const buffered = registry.snapshot('c1').find((b) => b.messageId === 'm1')!.events;
+    expect(buffered).toEqual([
+      { messageId: 'm1', type: 'reasoning-delta', text: 'Let me think.' },
+      { messageId: 'm1', type: 'text-delta', text: 'One two three.' },
+      { messageId: 'm1', type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a' } },
+      { messageId: 'm1', type: 'tool-result', id: 't1', name: 'read_file', result: 'x', isError: false },
+      { messageId: 'm1', type: 'text-delta', text: 'After the tool.' },
+      { messageId: 'm1', type: 'notice', text: 'A notice.' },
+      { messageId: 'm1', type: 'text-delta', text: 'End.' },
+    ]);
+    // The same parts either way: what a client rebuilds from the hello is what it would have built live.
+    expect(buffered.reduce(withEvent, [])).toEqual(copies.reduce(withEvent, []));
+  });
+
+  it('joins only within one reply, and a later delta never changes a snapshot already handed out', () => {
+    const { registry, emit } = emitter();
+    emit({ messageId: 'm1', type: 'text-delta', text: 'A' });
+    emit({ messageId: 'm2', type: 'text-delta', text: 'X' });
+    emit({ messageId: 'm1', type: 'text-delta', text: 'B' });
+    const before = JSON.stringify(registry.snapshot('c1'));
+    const held = registry.snapshot('c1').map((b) => [...b.events]);
+    emit({ messageId: 'm1', type: 'text-delta', text: 'C' });
+    emit({ messageId: 'm2', type: 'text-delta', text: 'Y' });
+    expect(JSON.stringify(held.map((events, i) => ({ ...registry.snapshot('c1')[i]!, events })))).toBe(before);
+    expect(registry.snapshot('c1').map((b) => b.events)).toEqual([
+      [{ messageId: 'm1', type: 'text-delta', text: 'ABC' }],
+      [{ messageId: 'm2', type: 'text-delta', text: 'XY' }],
+    ]);
   });
 });
 

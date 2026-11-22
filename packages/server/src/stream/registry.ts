@@ -8,7 +8,11 @@ import type { CanonMessage, MessageStatus } from '@otherbench/core/types/message
 export interface StreamBuffer {
   chatId: string;
   messageId: string;
-  /** Every `TurnEvent` seen for this message since the turn started, in order. Replaying this reproduces exactly what a subscriber connected from the start would have seen. */
+  /**
+   * The `TurnEvent`s seen for this message since the turn started, in order, with each run of the same kind of
+   * delta kept as one (`handleEvent`). Replaying this builds exactly the reply a subscriber connected from the
+   * start would have built.
+   */
   events: TurnEvent[];
   status: MessageStatus;
 }
@@ -135,8 +139,9 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
  * The in-memory log is necessarily lossy across two boundaries: a server
  * restart (every buffer is gone -- it never persisted anywhere) and the
  * retention window (a completed buffer is evicted `retentionMs` after it
- * stops streaming). `snapshot()` covers both by falling back to the `Store`
- * for any message id it has no live buffer for -- see `snapshotFromStore`.
+ * stops streaming). Neither loses a client anything: a reply with no buffer
+ * is finished and stored whole, which `GET /chats/:id/messages` gives it
+ * (see `snapshot`).
  */
 /** What a chat's stream subscriber hears: its replies' events, and chat-level ones (background tasks, stored messages changed). */
 export type ChatStreamEvent = TurnEvent | ChatLevelEvent | (TurnEvent & BackgroundMark);
@@ -227,9 +232,13 @@ export class StreamRegistry {
     // A run of one call's progress keeps only its latest in the buffer: a replay
     // needs no more, and a long video would otherwise fill it with steps. A
     // thinking start or stop straight after another needs only the latest too.
+    // A run of text (or of reasoning) is kept as one delta holding all of it: a reply is thousands of them, and a
+    // replay folds consecutive deltas of one kind into one part anyway (`appendDelta`), so it builds the same
+    // reply from one. A new object each time: the event itself went to the subscribers below as it came.
     const last = buffer.events.at(-1);
     if (event.type === 'tool-progress' && last?.type === 'tool-progress' && last.callId === event.callId) buffer.events[buffer.events.length - 1] = event;
     else if (event.type === 'thinking' && last?.type === 'thinking') buffer.events[buffer.events.length - 1] = event;
+    else if ((event.type === 'text-delta' || event.type === 'reasoning-delta') && last?.type === event.type) buffer.events[buffer.events.length - 1] = { ...last, text: last.text + event.text };
     else buffer.events.push(event);
     if (event.type === 'status') {
       buffer.status = event.status;
@@ -270,51 +279,33 @@ export class StreamRegistry {
   }
 
   /**
-   * Every buffer (in-flight, or completed within the retention window)
-   * belonging to `chatId`, plus one reconstructed from the persisted
-   * message row for every assistant message in this chat that has no live
-   * buffer -- e.g. a server restart lost every in-memory buffer, or this
-   * one aged out of the retention window. A message id is always served
-   * from exactly one of the two sources (in-memory is preferred whenever
-   * both exist, via `excludeIds` below), so a reconnecting client never
-   * sees duplicated content at this seam.
+   * What a client opening the chat's stream can't get from `GET /chats/:id/messages`, which it reads as it
+   * connects: the chat's hello (`inFlight`). Never the chat's history: every finished reply used to be rebuilt
+   * from its row and sent here, so opening a chat sent it twice and the client replayed the second copy over
+   * the first.
+   *
+   * - Every buffer of the chat. One being written is all of the reply so far; the stored row is only its last
+   *   checkpoint. One that finished within the retention window is kept in because a client's messages and its
+   *   stream are two requests: a reply that ended between them, or while the client was away for a moment, was
+   *   read as still being written and its end went to nobody, so the hello is what tells that client it ended.
+   * - A row the store says is being written that has no buffer, rebuilt from its last checkpoint. Startup closes
+   *   every such row (`reconcileInterruptedTurns`) and a buffer outlives its reply's writing, so there is none
+   *   today; it is here so a client is never left showing a reply as being written with nothing said of it.
+   *
+   * A reply that finished longer ago than the window has no buffer and is not sent: a client that was away that
+   * long reads the messages again when its stream comes back (web `useChatSync`), and a paired machine relaying
+   * this stream ends such a reply from this machine's activity (`settleRemoteRuns`) and syncs its row.
+   *
+   * A message id comes from exactly one of the two sources, so nothing is sent twice.
    */
   snapshot(chatId: string): StreamBuffer[] {
     const live = [...this.buffers.values()].filter((b) => b.chatId === chatId);
-    const excludeIds = new Set(live.map((b) => b.messageId));
-    return [...live, ...this.snapshotFromStore(chatId, excludeIds)];
-  }
-
-  /**
-   * Reconstructs a `StreamBuffer` for every assistant message in `chatId`
-   * that isn't already covered by an in-memory buffer, straight from
-   * `Store.messages`. `parts` (as of the last checkpoint -- TurnRunner
-   * checkpoints every 500ms while streaming, and unconditionally at
-   * completion) is turned back into the `TurnEvent`s that would have
-   * produced it: one delta/tool event per part, in order, plus a trailing
-   * `error` event if the row has one and a `status` event carrying the
-   * row's current status. Replaying that reconstructed list reproduces
-   * exactly the persisted parts -- no gap, no duplication -- the same
-   * guarantee the live in-memory path provides, just built from a single
-   * coalesced snapshot instead of the original delta-by-delta history.
-   */
-  private snapshotFromStore(chatId: string, excludeIds: Set<string>): StreamBuffer[] {
-    const buffers: StreamBuffer[] = [];
-    const queue = [...this.store.messages.roots(chatId)];
-    while (queue.length > 0) {
-      const message = queue.shift();
-      if (!message) continue;
-      queue.push(...this.store.messages.children(message.id));
-      if (message.role !== 'assistant' || excludeIds.has(message.id)) continue;
-
-      buffers.push({
-        chatId,
-        messageId: message.id,
-        events: reconstructEvents(message),
-        status: message.status,
-      });
-    }
-    return buffers;
+    const buffered = new Set(live.map((b) => b.messageId));
+    const unbuffered = this.store.messages
+      .listByStatus('streaming')
+      .filter((m) => m.chatId === chatId && m.role === 'assistant' && !buffered.has(m.id))
+      .map((m) => ({ chatId, messageId: m.id, events: reconstructEvents(m), status: m.status }));
+    return [...live, ...unbuffered];
   }
 
   /** Subscribes to live events for every message in `chatId`. Returns an unsubscribe function. */
