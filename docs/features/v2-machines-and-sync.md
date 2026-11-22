@@ -58,6 +58,23 @@ desktop app and lets two machines share chats. Built so far:
   it connects, when the peer announces changes, and every minute while it's
   reachable. Newer stamp wins, chats merge field by field, delete wins over
   a concurrent edit, and divergent continuations become sibling branches.
+  The clock starts from the newest stamp stored (`sync_state.clock_ms`), so a
+  restart never stamps earlier than what is there. A row stamped more than
+  five minutes ahead of this machine's time is not taken and the pull stops
+  there, cursor unmoved, with "clock is ahead" in Settings → Machines; it is
+  taken once the times agree. One more than a day ahead (a wrong date) is
+  passed over instead of waited for, and the clock never starts from a stored
+  time that far ahead. What is written under a reply that is still
+  streaming (a sub-agent's usage, a tool's file) is logged again when the
+  reply stops, so a machine that pulled in between still gets it.
+  The log and tombstones are tidied daily (`server/src/sync-log-sweep.ts`,
+  `pruneLog`): each machine notes the cursor every paired machine asks from
+  (`sync_peer_cursor`), and below the lowest that has stood for a week a row
+  keeps only its first and last log entry. A delete's tombstone goes once
+  every paired machine has pulled it and it is 90 days old. A paired machine
+  that never pulls holds all of this back until it is unpaired; a machine
+  unpaired for more than 90 days and paired again can bring back rows
+  deleted meanwhile.
   Synced: locations and their paths, connections (keys too, unless *keep
   the key on this machine*), models, profiles (their browser site lists
   included), projects and project memory,

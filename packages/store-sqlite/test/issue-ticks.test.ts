@@ -12,7 +12,8 @@ function node(id: string) {
 }
 
 const OLD_HLC = '0000000000001-0000-peer';
-const NEW_HLC = '9999999999999-0000-peer';
+// Newer than any stamp made here, from a clock a minute ahead (one further ahead than a few minutes is refused).
+const NEW_HLC = `${String(Date.now() + 60_000).padStart(13, '0')}-0000-peer`;
 
 const tickRow = (over: Record<string, unknown> = {}, hlc = OLD_HLC): ChangeRow => {
   const row = { id: 'a1#7', app_id: 'a1', number: 7, through: '2026-10-01T00:00:00Z', updated_at: 1, ...over };

@@ -36,13 +36,35 @@ export function backupBeforeMigration(db: DatabaseSync, dbPath: string, targetVe
   return copy;
 }
 
-function prune(dbPath: string, keep: number): void {
+/** The copies beside `dbPath`, oldest schema first. */
+function copiesOf(dbPath: string): { f: string; version: number }[] {
   const name = basename(dbPath);
   const pattern = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.before-schema-(\\d+)$`);
-  const copies = readdirSync(dirname(dbPath))
+  return readdirSync(dirname(dbPath))
     .map((f) => ({ f, m: pattern.exec(f) }))
     .filter((c): c is { f: string; m: RegExpExecArray } => c.m !== null)
-    .sort((a, b) => Number(a.m[1]) - Number(b.m[1]));
+    .map((c) => ({ f: c.f, version: Number(c.m[1]) }))
+    .sort((a, b) => a.version - b.version);
+}
+
+/**
+ * The newest copy beside `dbPath` that a build at `maxVersion` can open (its
+ * schema is no newer), or `null`: what a build that can't open the database
+ * itself points the user at.
+ */
+export function newestBackup(dbPath: string, maxVersion: number): string | null {
+  if (dbPath === ':memory:' || dbPath === '') return null;
+  try {
+    const usable = copiesOf(dbPath).filter((c) => c.version <= maxVersion);
+    const newest = usable[usable.length - 1];
+    return newest ? join(dirname(dbPath), newest.f) : null;
+  } catch {
+    return null;
+  }
+}
+
+function prune(dbPath: string, keep: number): void {
+  const copies = copiesOf(dbPath);
   for (const { f } of copies.slice(0, Math.max(0, copies.length - keep))) {
     try {
       rmSync(join(dirname(dbPath), f));

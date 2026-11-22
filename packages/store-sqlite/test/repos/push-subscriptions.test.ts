@@ -97,7 +97,7 @@ describe('SqlitePushSubscriptionRepo', () => {
       tbl: 'push_subscription',
       id: 's1',
       op: 'upsert',
-      hlc: '9999999999999-0000-peer',
+      hlc: '0000000000001-0000-peer',
       row: { session_id: 's1', endpoint: 'https://evil.example/', p256dh: 'x', auth: 'y', approvals: 1, replies: 1, scheduled: 1, created_at: 1, updated_at: 1 },
     } as unknown as ChangeRow;
     store.sync.apply([planted]);

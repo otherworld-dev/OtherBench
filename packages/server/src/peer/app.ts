@@ -37,6 +37,8 @@ export interface PeerAppDeps {
   forwardedApi?: () => { fetch: (req: Request, env: { peerNodeId: string }) => Response | Promise<Response> } | null;
   /** How often an idle `/peer/events` stream sends a keepalive; defaults to STREAM_KEEPALIVE_MS. */
   keepaliveMs?: number;
+  /** Told the cursor a paired machine asks for changes from: it has everything up to there (the store's `notePulled`). */
+  pulled?: (nodeId: string, since: number) => void;
 }
 
 export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hono<PeerEnv> {
@@ -99,7 +101,11 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
     const since = Number(c.req.query('since') ?? 0);
     const limit = Number(c.req.query('limit') ?? 500);
     if (!Number.isInteger(since) || since < 0 || !Number.isInteger(limit) || limit < 1) return c.json({ error: 'Bad since or limit.' }, 400);
-    return c.json(await service.requireSyncer().changesFor(since, limit));
+    const batch = await service.requireSyncer().changesFor(since, limit);
+    // Noted only once the batch is ready to send, and from the authenticated caller's own id: a machine can
+    // move no cursor but its own. It is what the change log is tidied by.
+    deps.pulled?.(c.get('peer').nodeId, since);
+    return c.json(batch);
   });
 
   /** A file's bytes by hash: only files sent in a message ever leave this machine. */

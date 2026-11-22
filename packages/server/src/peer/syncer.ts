@@ -1,3 +1,4 @@
+import { HLC_MAX_AHEAD_MS } from '@otherbench/core/domain/hlc.js';
 import { PEER_PROTOCOL_VERSION } from '@otherbench/core/domain/pairing.js';
 import { connectionSecretRef, isSha256, type ChangeBatch, type ChangeRow } from '@otherbench/core/domain/sync.js';
 import type { SecretStore } from '@otherbench/core/ports/secret-store.js';
@@ -83,7 +84,8 @@ export interface SyncerOptions {
  * serves this machine's to them. A pull reads `/peer/changes` from the
  * peer's cursor until there's nothing more, stores connection keys in this
  * machine's SecretStore, fetches and checks the blobs of new files, and
- * moves the cursor after every batch. It refuses a machine running a
+ * moves the cursor after every batch (but not past changes stamped by a
+ * clock far ahead of this one: those wait). It refuses a machine running a
  * different protocol or schema, saying which.
  *
  * Pulls run when a peer connects, when it announces changes, every minute
@@ -219,18 +221,27 @@ export class Syncer {
         throw new PeerError(message, 409);
       }
       let written = 0;
+      let waiting: string | null = null;
       for (;;) {
         const peer = peers.peer(nodeId);
         if (!peer) return written;
         const res = await peers.call(nodeId, { method: 'GET', path: `/peer/changes?since=${peer.lastSyncSeq}&limit=${this.options.batchSize ?? SYNC_BATCH_SIZE}` });
         if (res.status !== 200) throw new PeerError(`${peer.name} refused to send its changes (HTTP ${res.status}).`, 502);
         const batch = res.body as ChangeBatch;
-        written += await this.applyBatch(batch.rows);
+        const applied = await this.applyBatch(batch.rows);
+        written += applied.written;
+        if (applied.ahead > 0) {
+          // Rows stamped further ahead than this machine will follow were left out. The cursor stays where it is,
+          // so they are asked for again (with the rest of this batch, which changes nothing a second time) and
+          // taken once this machine's time reaches theirs; moving on would lose them for good.
+          waiting = `${peer.name}'s clock is more than ${HLC_MAX_AHEAD_MS / 60_000} minutes ahead of this machine's, so ${applied.ahead === 1 ? 'one of its changes is' : `${applied.ahead} of its changes are`} waiting. Check the date and time on both machines.`;
+          break;
+        }
         this.options.store.peers.update(nodeId, { lastSyncSeq: batch.nextSeq });
         if (!batch.more) break;
       }
       await this.fetchMissingBlobs(nodeId);
-      this.statuses.set(nodeId, { lastSyncedAt: this.now(), error: null, versionMismatch: null });
+      this.statuses.set(nodeId, waiting === null ? { lastSyncedAt: this.now(), error: null, versionMismatch: null } : { lastSyncedAt: this.status(nodeId).lastSyncedAt, error: waiting, versionMismatch: null });
       this.options.store.settings.setValue(mismatchKey(nodeId), null);
       if (written > 0) this.options.events?.emit({ type: 'sync-applied', nodeId, changed: written });
       return written;
@@ -242,7 +253,7 @@ export class Syncer {
     }
   }
 
-  private async applyBatch(rows: ChangeRow[]): Promise<number> {
+  private async applyBatch(rows: ChangeRow[]): Promise<{ written: number; ahead: number }> {
     const result = this.sync.apply(rows);
     // API keys travel with their connection inside the TLS session, and are
     // stored here under this machine's own SecretStore key.
@@ -253,7 +264,7 @@ export class Syncer {
       // Under the connection's own reference only (the store rewrote the row's to match).
       await this.options.secrets.set(connectionSecretRef(w.id), row.secret);
     }
-    return result.applied;
+    return { written: result.applied, ahead: result.ahead };
   }
 
   /** Every file from another machine whose blob isn't here: fetched and checked against its hash; a mismatch is dropped and tried again next time. */

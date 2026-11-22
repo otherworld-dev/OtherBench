@@ -243,8 +243,9 @@ export class SqliteMessageRepo implements MessageRepo {
   // to `complete` after a failed attempt must not keep the stale error.
   //
   // The status and the change log move together (`atomic`): a failure part way
-  // leaves the reply as it was and its files' log entries where they were, so
-  // a reply is never stopped with its files dropped from what a peer is sent.
+  // leaves the reply as it was and the log entries of what hangs off it where
+  // they were, so a reply is never stopped with those dropped from what a peer
+  // is sent (`relogDependents`).
   //
   // `finished_at` is when it stopped: now as it leaves streaming, cleared as it
   // streams again (a retry). It's in the same stamped write, so it syncs with the row.
@@ -256,16 +257,49 @@ export class SqliteMessageRepo implements MessageRepo {
       if (Number(result.changes) === 0) {
         throw new Error(`message: not found: ${id}`);
       }
-      if (status !== 'streaming') {
-        // The files of a reply (a tool's screenshots) are rows made while it was still
-        // streaming, so they were logged before the message could be sent and a peer
-        // had to turn them down. Now that the message follows, they do too: logged
-        // again, after it (the old entries go first, so their place in the log is
-        // behind the message's, even when a batch ends between the two).
-        this.db.prepare(`DELETE FROM change_log WHERE tbl = 'attachment' AND row_id IN (SELECT id FROM attachment WHERE message_id = ?)`).run(id);
-        this.db.prepare(`INSERT INTO change_log (tbl, row_id, op) SELECT 'attachment', id, 'upsert' FROM attachment WHERE message_id = ?`).run(id);
-      }
+      if (status !== 'streaming') this.relogDependents(id);
     });
+  }
+
+  /**
+   * Logs again, behind message `id` (which has just stopped streaming), every row that hangs off it.
+   *
+   * The files of a reply (a tool's screenshots), its usage (a sub-agent's is written while the reply
+   * still runs) and any message placed under it are rows made while it was streaming, so they were
+   * logged before the message could be sent, and a peer that pulled in between had to turn them down:
+   * their parent wasn't there. That peer's cursor has moved past them, so nothing would offer them
+   * again. Now that the message follows, they do too: logged again, after it (the old entries go
+   * first, so their place in the log is behind the message's, even when a batch ends between the two).
+   *
+   * A message under it brings its own files, usage and replies the same way, parents before children.
+   * One still streaming is left, with everything under it, for when it stops itself. A peer that
+   * already has a row logged again is sent it once more and changes nothing (its stamp is the same).
+   */
+  private relogDependents(id: string): void {
+    const unlog = this.db.prepare(`DELETE FROM change_log WHERE tbl = 'message' AND row_id = ?`);
+    const log = this.db.prepare(`INSERT INTO change_log (tbl, row_id, op) VALUES ('message', ?, 'upsert')`);
+    const unlogOf = (tbl: 'attachment' | 'usage') => this.db.prepare(`DELETE FROM change_log WHERE tbl = '${tbl}' AND row_id IN (SELECT id FROM ${tbl} WHERE message_id = ?)`);
+    const logOf = (tbl: 'attachment' | 'usage') => this.db.prepare(`INSERT INTO change_log (tbl, row_id, op) SELECT '${tbl}', id, 'upsert' FROM ${tbl} WHERE message_id = ?`);
+    const hanging = [unlogOf('attachment'), logOf('attachment'), unlogOf('usage'), logOf('usage')];
+    const children = this.db.prepare(`SELECT id FROM message WHERE parent_id = ? AND status != 'streaming' ORDER BY created_at ASC, id ASC`);
+
+    // Breadth first, so a message is always logged before what is under it. `seen` ends a parent cycle (see MAX_PATH_DEPTH).
+    const seen = new Set([id]);
+    const queue = [id];
+    for (let i = 0; i < queue.length; i++) {
+      const messageId = queue[i]!;
+      // The message that stopped was logged by its own update (the trigger); the ones under it are logged here.
+      if (messageId !== id) {
+        unlog.run(messageId);
+        log.run(messageId);
+      }
+      for (const statement of hanging) statement.run(messageId);
+      for (const child of children.all(messageId) as { id: string }[]) {
+        if (seen.has(child.id)) continue;
+        seen.add(child.id);
+        queue.push(child.id);
+      }
+    }
   }
 
   heads(chatId?: string): ChatHead[] {
@@ -306,9 +340,21 @@ export class SqliteMessageRepo implements MessageRepo {
   }
 
   listByStatus(status: MessageStatus): CanonMessage[] {
+    // 'streaming' is written into the SQL, not bound: only then can SQLite use the partial index over
+    // streaming rows (migration 055) instead of reading every message, as startup reconciliation used to.
+    const rows = (
+      status === 'streaming'
+        ? this.db.prepare(`SELECT ${COLUMNS} FROM message WHERE status = 'streaming' ORDER BY created_at ASC, id ASC`).all()
+        : this.db.prepare(`SELECT ${COLUMNS} FROM message WHERE status = ? ORDER BY created_at ASC, id ASC`).all(status)
+    ) as Record<string, unknown>[];
+    return rows.map(fromRow);
+  }
+
+  // Served by the same partial index, which leads with `chat_id`: the few rows streaming in one chat.
+  listStreaming(chatId: string): CanonMessage[] {
     const rows = this.db
-      .prepare(`SELECT ${COLUMNS} FROM message WHERE status = ? ORDER BY created_at ASC, id ASC`)
-      .all(status) as Record<string, unknown>[];
+      .prepare(`SELECT ${COLUMNS} FROM message WHERE chat_id = ? AND status = 'streaming' ORDER BY created_at ASC, id ASC`)
+      .all(chatId) as Record<string, unknown>[];
     return rows.map(fromRow);
   }
 
