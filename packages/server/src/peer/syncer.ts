@@ -166,7 +166,13 @@ export class Syncer {
         const message = err instanceof Error ? err.message : String(err);
         if (this.loggedFailures.get(nodeId) === message) return;
         this.loggedFailures.set(nodeId, message);
-        const name = this.options.peers.peer(nodeId)?.name ?? nodeId;
+        // The pull may have failed because the server is closing: then the store can't be asked for the name either.
+        let name = nodeId;
+        try {
+          name = this.options.peers.peer(nodeId)?.name ?? nodeId;
+        } catch {
+          // The id will do.
+        }
         // A machine that can't be reached or refuses is said in a line; anything else is a fault here, with its stack.
         if (err instanceof PeerError) console.error(`[otherbench-server] sync with ${name} failed: ${message}`);
         else console.error(`[otherbench-server] sync with ${name} failed:`, err);
