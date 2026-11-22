@@ -7,6 +7,7 @@ import { useOtherBenchStore } from '../state/store.js';
 import { THREAD_WINDOW, Thread } from './Thread.js';
 import { useClaudeAccounts } from '../state/claudeAccounts.js';
 import { useViewerStore, viewerFor } from '../viewer/state.js';
+import { useToasts } from '../lib/toasts.js';
 
 vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: ({ browserUsed }: { browserUsed?: boolean }) => <aside aria-label="Viewer" data-browser-used={String(browserUsed)} /> }));
 
@@ -608,6 +609,19 @@ describe('Thread auto-scroll', () => {
       expect(vi.mocked(api.chats.stop)).toHaveBeenCalledWith('chat-1');
     });
 
+    it("says so when the reply couldn't be stopped", async () => {
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      vi.mocked(api.chats.stop).mockRejectedValueOnce(new Error('HTTP 500'));
+      useToasts.setState({ toasts: [] });
+      streamingReply();
+      const user = userEvent.setup();
+      render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+      await user.click(screen.getByRole('textbox', { name: /message/i }));
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(useToasts.getState().toasts.at(-1)).toMatchObject({ text: "Couldn't stop the reply. Please try again.", tone: 'error' }));
+      logged.mockRestore();
+    });
+
     it('from the conversation', () => {
       streamingReply();
       render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
@@ -1025,6 +1039,27 @@ describe('Thread regenerate, edit and branch switching', () => {
     const switchers = screen.getAllByTestId('branch-switcher');
     expect(switchers[0]).toHaveTextContent('2 / 2');
     expect(screen.queryByRole('textbox', { name: 'Edit message' })).not.toBeInTheDocument();
+  });
+
+  it("says so when an edit was sent but the chat's place couldn't be saved", async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    useToasts.setState({ toasts: [] });
+    seedProfile();
+    load(usr('u1', null, 1, 'first'), asst('a1', 'u1', 2));
+    useOtherBenchStore.getState().setChats([makeChat({ headMessageId: 'a1' })]);
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1b', assistantMessageIds: ['a1b'] });
+    mockedSetHead.mockRejectedValue(new Error('HTTP 500'));
+    render(<ThreadForChat chatId="chat-1" />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.type(screen.getByRole('textbox', { name: 'Edit message' }), ' again');
+    await user.click(screen.getByRole('button', { name: 'Save and send' }));
+    await waitFor(() =>
+      expect(useToasts.getState().toasts.at(-1)).toMatchObject({ text: "Sent, but couldn't save which branch the chat is on. It may open on the earlier one next time.", tone: 'error', chatId: 'chat-1' })
+    );
+    // The edit itself went through and stays on show.
+    expect(useOtherBenchStore.getState().chats[0]?.headMessageId).toBe('u1b');
+    logged.mockRestore();
   });
 
   it('Cancel closes the editor without sending anything', async () => {

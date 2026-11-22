@@ -21,6 +21,7 @@ import { FactCards } from '../components/AppNoteCards.js';
 import { WaitingNotes } from '../components/WaitingNotes.js';
 import { api, ApiError } from '../state/api.js';
 import { escapeStopsReply } from '../lib/escapeStopsReply.js';
+import { toast } from '../lib/toasts.js';
 import { findMatches, firstMatchFrom, isFindShortcut, isMacPlatform, messageFindText, stepMatch, type FindMatch } from '../lib/chatFind.js';
 import { findRoots, locateMatch, showFindHighlight } from '../lib/findInDom.js';
 import { clampWindow, windowFor, type DrawnWindow } from '../lib/threadWindow.js';
@@ -505,7 +506,11 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       // Same head rule as Composer: head lands on the new USER message and the
       // thread walks into its lone reply.
       setHeadMessageId(chat!.id, result.userMessageId);
-      void api.turns.setHead(chat!.id, result.userMessageId).catch((err: unknown) => console.error('[otherbench-web] failed to persist head:', err));
+      void api.turns.setHead(chat!.id, result.userMessageId).catch((err: unknown) => {
+        console.error('[otherbench-web] failed to persist head:', err);
+        // The edit is sent and on show; only the server's note of which branch is current is behind.
+        toast({ text: "Sent, but couldn't save which branch the chat is on. It may open on the earlier one next time.", tone: 'error', chatId: chat!.id });
+      });
       setEditingId(null);
     } catch (err) {
       console.error('[otherbench-web] failed to send edited message:', err);

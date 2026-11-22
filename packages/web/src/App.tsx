@@ -4,6 +4,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { Toaster } from './components/Toaster.js';
 import { ChartIcon, ClockIcon, DockIcon, GearIcon, MenuIcon, SignOutIcon } from './components/icons.js';
 import { dock, isIndicatorView, isQuickView } from './desktop/bridge.js';
+import { toast } from './lib/toasts.js';
 import { useDocks } from './desktop/useDocks.js';
 import { useChanged } from './lib/useChanged.js';
 import { NARROW_BREAKPOINT, PHONE_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
@@ -123,7 +124,12 @@ function OverviewWindow(): JSX.Element {
           <button
             type="button"
             data-testid="dock-toggle"
-            onClick={() => void dock('overview').catch((err: unknown) => console.error('[otherbench-web] failed to dock the Overview:', err))}
+            onClick={() =>
+              void dock('overview').catch((err: unknown) => {
+                console.error('[otherbench-web] failed to dock the Overview:', err);
+                toast({ text: "Couldn't put the Overview back in the main window.", tone: 'error' });
+              })
+            }
             aria-label="Put the Overview back in the main window"
             title="Put the Overview back in the main window"
             className="btn px-1.5 py-0.5"

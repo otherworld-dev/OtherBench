@@ -1,4 +1,5 @@
 import { useState, type JSX, type ReactNode } from 'react';
+import { toast } from '../lib/toasts.js';
 import { api } from '../state/api.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { ClaudeAccountsStrip } from './ClaudeAccountsStrip.js';
@@ -102,7 +103,10 @@ export function OverviewView({ action }: { action?: ReactNode } = {}): JSX.Eleme
     api.overview
       .refresh()
       .then(setOverview)
-      .catch((err: unknown) => console.error('[otherbench-web] failed to refresh the overview:', err));
+      .catch((err: unknown) => {
+        console.error('[otherbench-web] failed to refresh the overview:', err);
+        toast({ text: "Couldn't refresh the Overview.", tone: 'error' });
+      });
   };
 
   return (

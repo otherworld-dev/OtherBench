@@ -98,7 +98,10 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
     // The active run, not the last: a slot it overran is recorded after it.
     const messageId = s.activeRun?.messageId;
     if (!messageId) return;
-    await api.turns.cancel(messageId).catch((err: unknown) => console.error('[otherbench-web] failed to stop a scheduled run:', err));
+    await api.turns.cancel(messageId).catch((err: unknown) => {
+      console.error('[otherbench-web] failed to stop a scheduled run:', err);
+      setRunErrors((prev) => ({ ...prev, [s.id]: `Couldn't stop the run: ${err instanceof Error ? err.message : String(err)}` }));
+    });
   }
 
   async function togglePaused(s: ScheduleView): Promise<void> {

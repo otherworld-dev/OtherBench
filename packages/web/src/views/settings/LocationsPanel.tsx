@@ -2,6 +2,7 @@ import { useEffect, useState, type JSX } from 'react';
 import type { NodeInfo } from '@otherbench/core/types/workspace.js';
 import { ConfirmDialog } from '../../components/ConfirmDialog.js';
 import { isDesktop, pickFolder } from '../../desktop/bridge.js';
+import { toast } from '../../lib/toasts.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../../lib/workspaceRoot.js';
 import { ApiError, api, type LocationView } from '../../state/api.js';
 import { useOtherBenchStore } from '../../state/store.js';
@@ -44,7 +45,10 @@ function PathInput({ value, onChange, label, onEnter }: { value: string; onChang
               .then((picked) => {
                 if (picked !== null) onChange(picked);
               })
-              .catch((err: unknown) => console.error('[otherbench-web] folder picker failed:', err));
+              .catch((err: unknown) => {
+                console.error('[otherbench-web] folder picker failed:', err);
+                toast({ text: "Couldn't open the folder picker. Type the path instead.", tone: 'error' });
+              });
           }}
         >
           Choose…

@@ -36,7 +36,8 @@ export function QuickChat(): JSX.Element {
 
   useChatSync(chat?.id ?? null);
   // Esc stops a running reply first; with nothing running it hides the window. The key listener reads the latest through an effect event.
-  const replies = useStopReply(chat?.id ?? null);
+  // This window has no toasts: a Stop that failed shows where its other errors do.
+  const replies = useStopReply(chat?.id ?? null, setError);
   const currentReplies = useEffectEvent(() => replies);
 
   useEffect(() => {
@@ -64,7 +65,10 @@ export function QuickChat(): JSX.Element {
         void running.stop();
         return;
       }
-      hideQuick().catch((err: unknown) => console.error('[otherbench-web] failed to hide quick chat:', err));
+      hideQuick().catch((err: unknown) => {
+        console.error('[otherbench-web] failed to hide quick chat:', err);
+        setError("Couldn't hide this window.");
+      });
     };
     window.addEventListener('keydown', onKey);
     return () => {
@@ -133,7 +137,10 @@ export function QuickChat(): JSX.Element {
     const id = chat.id;
     setChat(null);
     setText('');
-    openChatInMain(id).catch((err: unknown) => console.error('[otherbench-web] failed to open the chat in the main window:', err));
+    openChatInMain(id).catch((err: unknown) => {
+      console.error('[otherbench-web] failed to open the chat in the main window:', err);
+      setError("Couldn't open the chat in the main window. It's in the chat list there.");
+    });
   }
 
   return (

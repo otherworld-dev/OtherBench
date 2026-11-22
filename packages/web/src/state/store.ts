@@ -120,6 +120,15 @@ export function openHandedOver(open: () => void): void {
   }
 }
 
+/** The app's windows as a message names them. */
+const WINDOW_NAMES: Record<WindowRole, string> = { main: 'main', code: 'Code', overview: 'Overview' };
+
+/** A click meant for another window that never reached it: said, since nothing changes in this one. */
+function failedToShow(target: WindowRole, err: unknown): void {
+  console.error(`[otherbench-web] failed to bring the ${target} window forward:`, err);
+  toast({ text: `Couldn't bring the ${WINDOW_NAMES[target]} window forward.`, tone: 'error' });
+}
+
 /**
  * Hands `request` to the window holding `mode` when that isn't this one, and says so: then the caller
  * changes nothing here. The Overview window holds no mode, so everything it opens goes elsewhere.
@@ -129,7 +138,10 @@ export function sentElsewhere(mode: Mode, request: OpenRequest): boolean {
   if (handedOver) return false;
   const target = windowForMode(mode, useOtherBenchStore.getState().undocked, WINDOW_ROLE);
   if (target === WINDOW_ROLE) return false;
-  openIn(target, request).catch((err: unknown) => console.error(`[otherbench-web] failed to open that in the ${target} window:`, err));
+  openIn(target, request).catch((err: unknown) => {
+    console.error(`[otherbench-web] failed to open that in the ${target} window:`, err);
+    toast({ text: `Couldn't open that in the ${WINDOW_NAMES[target]} window.`, tone: 'error' });
+  });
   return true;
 }
 
@@ -137,7 +149,7 @@ export function sentElsewhere(mode: Mode, request: OpenRequest): boolean {
 function shownElsewhere(mode: Mode, undocked: readonly DockView[]): boolean {
   const target = windowForMode(mode, undocked, WINDOW_ROLE);
   if (target === WINDOW_ROLE) return false;
-  showWindow(target).catch((err: unknown) => console.error(`[otherbench-web] failed to bring the ${target} window forward:`, err));
+  showWindow(target).catch((err: unknown) => failedToShow(target, err));
   return true;
 }
 
@@ -548,7 +560,7 @@ export const useOtherBenchStore = create<OtherBenchState>()((set, get) => ({
   overviewOpen: WINDOW_ROLE === 'main' && !initialUndocked.includes('overview') && loadOverviewOpen(),
   setOverviewOpen: (open) => {
     if (open && get().undocked.includes('overview') && WINDOW_ROLE !== 'overview') {
-      showWindow('overview').catch((err: unknown) => console.error('[otherbench-web] failed to bring the Overview window forward:', err));
+      showWindow('overview').catch((err: unknown) => failedToShow('overview', err));
       return;
     }
     set({ overviewOpen: open });
