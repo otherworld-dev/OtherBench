@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeSecretStore } from '@otherbench/core/testing/fakes.js';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createBlobStore, type BlobStore, type StoredBlob } from '@otherbench/store-sqlite/blob-store.js';
@@ -407,5 +407,37 @@ describe('syncing two machines over the peer listener', () => {
     expect(res.status).toBe(200);
     expect((res.body as { applied: number }).applied).toBeGreaterThan(0);
     expect(pc.store.chats.get('chat')).toMatchObject({ title: 'From the PC' });
+  });
+});
+
+describe('a pull nobody waits for', () => {
+  it('logs why it failed, once for a failure that repeats, and again once it has worked in between', async () => {
+    const a = syncNode('A');
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const settled = async (): Promise<void> => {
+        await a.syncer.pullFrom('node-gone').catch(() => 0);
+        await new Promise((r) => setImmediate(r));
+      };
+      const failures = (): unknown[][] => logged.mock.calls.filter((c) => String(c[0]).includes('sync with node-gone failed'));
+      a.syncer.pullSoon('node-gone');
+      await settled();
+      expect(failures()).toEqual([['[otherbench-server] sync with node-gone failed: No paired machine "node-gone".']]);
+      a.syncer.pullSoon('node-gone');
+      a.syncer.pullSoon('node-gone');
+      await settled();
+      expect(failures()).toHaveLength(1);
+
+      // It works once, then fails the same way: that is news again.
+      const pull = vi.spyOn(a.syncer, 'pullFrom').mockResolvedValueOnce(0);
+      a.syncer.pullSoon('node-gone');
+      await new Promise((r) => setImmediate(r));
+      pull.mockRestore();
+      a.syncer.pullSoon('node-gone');
+      await settled();
+      expect(failures()).toHaveLength(2);
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

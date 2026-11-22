@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppEvent } from '@otherbench/core/types/events.js';
 import { createApp } from '../../src/app.js';
 import { createContainer, type Container } from '../../src/container.js';
@@ -174,5 +174,38 @@ describe('a reply on a paired machine ends here with no window watching its chat
     expect(laptop.container.events!.runningTurns().map((t) => t.messageId)).toEqual([replyId]);
     expect(await busy(laptop)).toEqual({ busy: false, reasons: [] });
     expect(await busy(pc)).toMatchObject({ busy: true, reasons: ['1 reply being written'] });
+  });
+});
+
+describe("a relay that fails on this machine's side", () => {
+  it('says why in the log, rather than only telling the window the other machine stopped responding', async () => {
+    const { laptop, chatId, profileId } = await setup();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // Something in the relay's own handling throws (here: noting the reply's approval card).
+      laptop.container.remoteRuns!.noteApproval = () => {
+        throw new Error('the relay broke here');
+      };
+      const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+      const replyId = await send(laptop, chatId, profileId, 'read it #tool note.txt');
+      const reader = stream.body!.getReader();
+      const decoder = new TextDecoder();
+      let heard = '';
+      while (!/"status":"error"/.test(heard)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        heard += decoder.decode(value, { stream: true });
+      }
+      await reader.cancel();
+      expect(heard).toContain('peer_unreachable');
+      const said = logged.mock.calls.filter((c) => String(c[0]).includes('relay'));
+      expect(said).toHaveLength(1);
+      expect(String(said[0]![0])).toContain(chatId);
+      expect(said[0]![1]).toMatchObject({ message: 'the relay broke here' });
+      // The reply still ends here, so nothing waits on it.
+      await expect.poll(() => finishes(laptop, replyId).length).toBe(1);
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

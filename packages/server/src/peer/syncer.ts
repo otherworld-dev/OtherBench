@@ -98,6 +98,8 @@ export class Syncer {
   private readonly now: () => number;
   private timers: ReturnType<typeof setInterval>[] = [];
   private announcedSeq = 0;
+  /** The failure last logged for each peer by `pullSoon`, so one that repeats every minute is logged once. */
+  private readonly loggedFailures = new Map<string, string>();
 
   constructor(private readonly options: SyncerOptions) {
     this.now = options.now ?? Date.now;
@@ -151,9 +153,25 @@ export class Syncer {
     this.options.onLocalChanges?.();
   }
 
-  /** `pullFrom` without waiting, logging a failure (it's shown in Settings → Machines). */
+  /**
+   * `pullFrom` without waiting, logging a failure (it's shown in Settings → Machines too). The same failure again
+   * (a version mismatch on every fallback pull, say) isn't logged again until a pull has worked or it fails another way.
+   */
   pullSoon(nodeId: string): void {
-    this.pullFrom(nodeId).catch(() => {});
+    this.pullFrom(nodeId).then(
+      () => {
+        this.loggedFailures.delete(nodeId);
+      },
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        if (this.loggedFailures.get(nodeId) === message) return;
+        this.loggedFailures.set(nodeId, message);
+        const name = this.options.peers.peer(nodeId)?.name ?? nodeId;
+        // A machine that can't be reached or refuses is said in a line; anything else is a fault here, with its stack.
+        if (err instanceof PeerError) console.error(`[otherbench-server] sync with ${name} failed: ${message}`);
+        else console.error(`[otherbench-server] sync with ${name} failed:`, err);
+      }
+    );
   }
 
   /** Pulls everything `nodeId` has that this machine doesn't. Resolves with the number of rows written. */

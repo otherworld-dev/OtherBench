@@ -625,7 +625,16 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
       }
       sink.send(null, data);
     }, heardFrom)
-      .catch(() => {})
+      .catch((err: unknown) => {
+        // The window leaving ends the upstream too: not a failure.
+        if (!open) return;
+        // Whatever it was, the replies end below as cut off and the window is told the other machine stopped
+        // responding. Why goes in the log: a dropped connection in a line, anything else (a fault in the relaying
+        // here) with its stack.
+        const code = (err as { code?: unknown } | null)?.code;
+        const dropped = err instanceof Error && typeof code === 'string';
+        console.error(`[otherbench-server] the relay of chat ${chatId} from ${peer.name} ended on an error:`, dropped ? `${code}: ${err.message}` : err);
+      })
       .finally(() => {
         clearTimeout(idle);
         if (!open) return;
