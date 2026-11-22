@@ -51,6 +51,7 @@ import { MIGRATION_049_CHAT_SEND_REMOTE } from './049-chat-send-remote.js';
 import { MIGRATION_050_RESERVED } from './050-reserved.js';
 import { MIGRATION_051_JOB_CHATS } from './051-job-chats.js';
 import { MIGRATION_052_JOB_APP_CONTEXT } from './052-job-app-context.js';
+import { MIGRATION_053_CLOCK_MARK } from './053-clock-mark.js';
 import { newestBackup } from '../backup.js';
 import type { Migration } from './types.js';
 
@@ -109,6 +110,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_050_RESERVED,
   MIGRATION_051_JOB_CHATS,
   MIGRATION_052_JOB_APP_CONTEXT,
+  MIGRATION_053_CLOCK_MARK,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

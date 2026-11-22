@@ -317,11 +317,23 @@ export class SqliteSyncRepo implements SyncRepo {
 
   // --- applying a peer's changes -----------------------------------------------
 
-  apply(rows: ChangeRow[], observe: (hlc: string) => void = (h) => this.observe(h)): SyncApplyResult {
-    const result: SyncApplyResult = { applied: 0, skipped: 0, attachments: [], written: [] };
-    for (const r of rows) {
-      observe(r.hlc);
-      if (r.op === 'upsert' && r.fieldHlc) for (const h of Object.values(r.fieldHlc)) observe(h);
+  apply(offered: ChangeRow[], observe: (hlc: string) => void = (h) => this.observe(h)): SyncApplyResult {
+    const result: SyncApplyResult = { applied: 0, skipped: 0, ahead: 0, attachments: [], written: [] };
+    // A row stamped further ahead than a machine with a sane clock can be is not taken, and its stamp is not
+    // followed: it would beat every later change made here until this machine's time caught up with it, and
+    // following it would leave this clock that far ahead for good. One this machine's time will reach within a
+    // day is counted in `ahead`, so the caller asks again; one further off still is only skipped.
+    const rows: ChangeRow[] = [];
+    for (const r of offered) {
+      const stamps = r.op === 'upsert' && r.fieldHlc ? [r.hlc, ...Object.values(r.fieldHlc)] : [r.hlc];
+      const ahead = stamps.map((h) => this.clock.ahead(h));
+      if (ahead.some((a) => a !== 'ok')) {
+        if (!ahead.includes('never')) result.ahead++;
+        result.skipped++;
+        continue;
+      }
+      for (const h of stamps) observe(h);
+      rows.push(r);
     }
     const order = (t: SyncTable): number => SYNC_TABLES.indexOf(t);
     const upserts = rows

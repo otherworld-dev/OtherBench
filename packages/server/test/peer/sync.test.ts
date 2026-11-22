@@ -32,11 +32,11 @@ afterEach(async () => {
   for (const c of cleanup.splice(0).reverse()) await c();
 });
 
-function syncNode(name: string, options: { schemaVersion?: number; appVersion?: string; fallbackMs?: number; changeCheckMs?: number } = {}): SyncNode {
+function syncNode(name: string, options: { schemaVersion?: number; appVersion?: string; fallbackMs?: number; changeCheckMs?: number; now?: () => number } = {}): SyncNode {
   const db = openDatabase(':memory:');
   runMigrations(db);
   db.prepare('UPDATE node_self SET id = ?, name = ?').run(`node-${name}`, name);
-  const store = new SqliteStore(db);
+  const store = new SqliteStore(db, options.now ? { now: options.now } : {});
   const secrets = new FakeSecretStore();
   const dir = mkdtempSync(join(tmpdir(), `otherbench-sync-${name}-`));
   const blobs = createBlobStore(join(dir, 'blobs'));
@@ -272,6 +272,29 @@ describe('syncing two machines over the peer listener', () => {
     expect(await pc.syncer.blob(wrong.sha256)).toBeNull();
     expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${wrong.sha256}` })).status).toBe(404);
     expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${'0'.repeat(64)}` })).status).toBe(404);
+  });
+
+  it("waits for a machine whose clock is far ahead instead of taking its changes or passing them by", async () => {
+    let laptopTime = Date.now();
+    // The PC's clock runs ten minutes fast.
+    const pc = syncNode('PC', { now: () => Date.now() + 10 * 60_000 });
+    const laptop = syncNode('Laptop', { now: () => laptopTime });
+    seed(pc);
+    await pairNodes(pc, laptop);
+
+    expect(await laptop.syncer.pullFrom('node-PC')).toBe(0);
+
+    expect(laptop.store.chats.get('chat')).toBeNull();
+    // The cursor stays, so the same changes are asked for again.
+    expect(laptop.store.peers.get('node-PC')!.lastSyncSeq).toBe(0);
+    expect(laptop.syncer.status('node-PC')).toMatchObject({ lastSyncedAt: null, error: expect.stringMatching(/PC.*clock.*ahead/) });
+
+    // Once this machine's time has reached them (or the PC's clock is put right and time passes), they are taken.
+    laptopTime = Date.now() + 9 * 60_000;
+    expect(await laptop.syncer.pullFrom('node-PC')).toBeGreaterThan(4);
+    expect(laptop.store.chats.get('chat')).toMatchObject({ title: 'From the PC' });
+    expect(laptop.store.peers.get('node-PC')!.lastSyncSeq).toBe(pc.store.sync.latestSeq());
+    expect(laptop.syncer.status('node-PC')).toMatchObject({ error: null, lastSyncedAt: expect.any(Number) });
   });
 
   it('refuses to sync with a machine on a different schema, saying which to update', async () => {

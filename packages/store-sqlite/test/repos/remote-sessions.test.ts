@@ -83,7 +83,7 @@ describe('SqliteRemoteSessionRepo', () => {
       tbl: 'remote_session',
       id: 's9',
       op: 'upsert',
-      hlc: '9999999999999-0000-peer',
+      hlc: '0000000000001-0000-peer',
       row: { id: 's9', token_hash: 'c'.repeat(64), created_at: 1, last_seen_at: 1, expires_at: 9e15, remember: 1, epoch: 'e1', address: null, device_label: 'x' },
     } as unknown as ChangeRow;
     store.sync.apply([planted]);
