@@ -181,17 +181,8 @@ describe('runStatusCommand', () => {
     expect(STATUS_SET_NOTE).toMatch(/don't (repeat|write it again)/i);
   });
 
-  it('tells the model the steps go in the ask and are not written out in the reply as well', () => {
-    expect(STATUS_TOOL_DESCRIPTION).toMatch(/don't write the same steps out in both/i);
-  });
-
-  // 2026-11-23: asked a plain question, a model set the status and wrote nothing, so the box was the whole reply.
-  it('tells the model the box is never the reply, in the description and after every call', () => {
-    expect(STATUS_TOOL_DESCRIPTION).toMatch(/never the reply/i);
-    expect(STATUS_TOOL_DESCRIPTION).toMatch(/answer what the user just asked/i);
-    expect(STATUS_TOOL_DESCRIPTION).not.toMatch(/leave the detail to the ask/i);
-    expect(STATUS_SET_NOTE).toMatch(/not your reply/i);
-    expect(STATUS_SET_NOTE).toMatch(/write it now/i);
+  it('tells the model the box carries the asks, so the reply does not write them out as well', () => {
+    expect(STATUS_TOOL_DESCRIPTION).toMatch(/don't write the same instructions out in your reply/i);
   });
 
   it('asks for the call before the final message, not after it', () => {
