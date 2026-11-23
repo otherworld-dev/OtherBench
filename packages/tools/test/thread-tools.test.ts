@@ -38,7 +38,7 @@ describe('thread tools for API profiles', () => {
     const { tool } = setup();
     const status = await tool('set_chat_status');
     expect(await status.execute({ done: false, left: [{ text: 'push', who: 'me' }, { text: 'docs', who: 'you', ask: 'Read the docs page and say if it is clear.' }] }, ctx())).toMatch(
-      /^Status set: 2 left, 1 waiting on the user\. /,
+      /^Status set: 2 left, 1 waiting on the user now\. /,
     );
     expect(await status.execute({ done: false }, ctx())).toMatchObject({ error: true });
     expect(await status.execute({ done: false, left: [{ text: 'docs', who: 'you' }] }, ctx())).toMatchObject({ error: true });
