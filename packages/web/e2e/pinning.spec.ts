@@ -55,6 +55,8 @@ test("a clicked row doesn't keep its action buttons showing once the pointer lea
     await row.getByRole('button', { name: title }).click();
     await page.mouse.move(700, 400);
     await expect(actions).toHaveCSS('opacity', '0');
+    // The click took the cursor on to the message box; the keyboard comes back to the row.
+    await row.getByRole('button', { name: title }).focus();
     await page.keyboard.press('Tab');
     await expect(row.getByRole('button', { name: 'Pin chat' })).toBeFocused();
     await expect(actions).toHaveCSS('opacity', '1');

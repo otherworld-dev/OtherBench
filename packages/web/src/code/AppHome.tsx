@@ -12,6 +12,7 @@ import { setAppOpen } from './appOpen.js';
 import { useFeatures } from '../state/features.js';
 import { useNow } from '../lib/useNow.js';
 import { chatStatus, isNeedsYou, useChatActivity } from '../state/chatStatus.js';
+import { openChatFromClick } from '../state/openChatFromClick.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { IssuesTab } from './IssuesTab.js';
 import { hasAppNotesContent } from '@otherbench/core/domain/app-notes.js';
@@ -224,7 +225,6 @@ function NewChat({ app }: { app: App }): JSX.Element {
 
 function AppChats({ app }: { app: App }): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
-  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const activity = useChatActivity();
   const now = useNow(60_000);
   // In its sidebar group's order, so the page and the sidebar agree; listed whether the app is open or closed.
@@ -244,7 +244,7 @@ function AppChats({ app }: { app: App }): JSX.Element {
             const status = chatStatus(c, activity, now);
             return (
               <li key={c.id} data-chat-id={c.id} className="flex items-center rounded-sm hover:bg-[var(--bg-sunken)]">
-                <button type="button" onClick={() => setActiveChatId(c.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">
+                <button type="button" onClick={(e) => openChatFromClick(c.id, e)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">
                   <span className={`min-w-0 flex-1 truncate ${isNeedsYou(status) ? 'font-medium' : ''}`}>{c.title}</span>
                   <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatRelativeTime(c.updatedAt)}</span>
                 </button>

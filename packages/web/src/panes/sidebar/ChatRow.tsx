@@ -42,7 +42,8 @@ export function positionIn(e: DragEvent<HTMLElement>): DropPosition {
 export interface ChatRowProps {
   chat: Chat;
   active: boolean;
-  onSelect: () => void;
+  /** `click`: the click itself, whose `detail` is 0 for a key press. */
+  onSelect: (click: { detail: number }) => void;
   onDragEnd: () => void;
   menuOpen?: boolean;
   renaming?: boolean;

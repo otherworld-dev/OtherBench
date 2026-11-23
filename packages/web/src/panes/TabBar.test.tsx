@@ -67,6 +67,22 @@ describe('TabBar (#824)', () => {
     expect(screen.getAllByRole('tab').every((t) => t.getAttribute('aria-selected') === 'false')).toBe(true);
     await user.click(screen.getByRole('tab', { name: 'Chat a' }));
     expect(useOtherBenchStore.getState().activeChatId).toBe('a');
+    // The cursor goes on to the chat's message box.
+    expect(useOtherBenchStore.getState().composerFocus).toBe('a');
+  });
+
+  it('a tab reached with the arrow keys, or a tab that is not a chat, asks nothing of the message box', async () => {
+    const home = projectTabId('p1');
+    openTabs('a', 'b', home);
+    useOtherBenchStore.getState().setActiveChatId('a');
+    const user = userEvent.setup();
+    render(<TabBar narrow={false} />);
+    screen.getByRole('tab', { name: 'Chat a' }).focus();
+    await user.keyboard('{ArrowRight}');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('b');
+    await user.click(screen.getAllByRole('tab')[2]!);
+    expect(useOtherBenchStore.getState().activeChatId).toBe(home);
+    expect(useOtherBenchStore.getState().composerFocus).toBeNull();
   });
 
   it('closing a tab takes its chat out of the pane, showing the next tab instead', async () => {

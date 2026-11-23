@@ -71,7 +71,6 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const projects = useOtherBenchStore((s) => s.projects);
   const profiles = useOtherBenchStore((s) => s.profiles);
   const activeChatId = useOtherBenchStore((s) => s.activeChatId);
-  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const openProjectPage = useOtherBenchStore((s) => s.openProjectPage);
   const paneTabs = useOtherBenchStore((s) => s.paneState.tabs);
   const machines = useOtherBenchStore((s) => s.machines);
@@ -169,7 +168,6 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
     apps,
     profiles,
     activeChatId,
-    setActiveChatId,
     collapsedGroups,
     topLevelGroupKeys,
     oneProjectOpen,

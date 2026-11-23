@@ -2,6 +2,7 @@ import type { Dispatch, JSX, SetStateAction } from 'react';
 import { projectDisplayName, type ProjectLookup } from '@otherbench/core/domain/projects.js';
 import type { App, Chat } from '@otherbench/core/ports/store.js';
 import type { Profile } from '@otherbench/core/types/config.js';
+import { openChatFromClick } from '../../state/openChatFromClick.js';
 import { chatStatus, groupStatusSummary, isOnCard, type ChatActivity, type ChatStatus } from '../../state/chatStatus.js';
 import { expandGroupAlone, setGroupCollapsed } from '../../state/sidebarGroups.js';
 import { ChatRow, type DropPosition } from './ChatRow.js';
@@ -21,7 +22,6 @@ export interface SidebarRenderContext {
   apps: App[];
   profiles: Profile[];
   activeChatId: string | null;
-  setActiveChatId: (id: string | null) => void;
   collapsedGroups: ReadonlySet<string>;
   /** Every top-level Chat mode group's key (each parent project, and No project), shown or not. */
   topLevelGroupKeys: readonly string[];
@@ -57,7 +57,6 @@ export function sidebarRenderers({
   apps,
   profiles,
   activeChatId,
-  setActiveChatId,
   collapsedGroups,
   topLevelGroupKeys,
   oneProjectOpen,
@@ -261,7 +260,7 @@ export function sidebarRenderers({
         chat={chat}
         status={statusOf(chat)}
         active={chat.id === activeChatId}
-        onSelect={() => setActiveChatId(chat.id)}
+        onSelect={(click) => openChatFromClick(chat.id, click)}
         onDragStart={() => setDraggingChatId(chat.id)}
         onDragEnd={() => {
           setDropTarget(null);

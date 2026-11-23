@@ -737,6 +737,18 @@ describe('ChatList chat menu', () => {
   }
   const row = (title: string) => screen.getByRole('button', { name: title });
 
+  it("a click on a chat opens it with the cursor in its message box; Enter opens it and keeps the row's place", async () => {
+    const user = setup();
+    await user.click(row('Second'));
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c2');
+    expect(useOtherBenchStore.getState().composerFocus).toBe('c2');
+
+    row('First').focus();
+    await user.keyboard('{Enter}');
+    expect(useOtherBenchStore.getState().activeChatId).toBe('c1');
+    expect(useOtherBenchStore.getState().composerFocus).toBe('c2');
+  });
+
   it('right-click opens the menu on its first item; Escape closes it and returns focus to the row', async () => {
     const user = setup();
     fireEvent.contextMenu(row('First'), { clientX: 40, clientY: 50 });
