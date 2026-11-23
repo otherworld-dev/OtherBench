@@ -10,6 +10,7 @@ import { formatRelativeTime } from '../lib/relativeTime.js';
 import { allGroups, buildSidebar } from '../panes/sidebar/model.js';
 import { useNow } from '../lib/useNow.js';
 import { chatStatus, isNeedsYou, useChatActivity } from '../state/chatStatus.js';
+import { openChatFromClick } from '../state/openChatFromClick.js';
 import { projectTabId } from '../state/projectTab.js';
 import { useOtherBenchStore } from '../state/store.js';
 import { useProjectMemory } from '../state/useProjectMemory.js';
@@ -122,7 +123,6 @@ function SubProjects({ projectId }: { projectId: string }): JSX.Element | null {
 function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
   const chats = useOtherBenchStore((s) => s.chats);
   const projects = useOtherBenchStore((s) => s.projects);
-  const setActiveChatId = useOtherBenchStore((s) => s.setActiveChatId);
   const activity = useChatActivity();
   const now = useNow(60_000);
   // The sidebar's own grouping, so the page and the sidebar always agree on order.
@@ -142,7 +142,7 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
             const status = chatStatus(c, activity, now);
             return (
               <li key={c.id} data-chat-id={c.id} className="flex items-center rounded-sm hover:bg-[var(--bg-sunken)]">
-                <button type="button" onClick={() => setActiveChatId(c.id)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">
+                <button type="button" onClick={(e) => openChatFromClick(c.id, e)} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">
                   <span className={`min-w-0 flex-1 truncate ${isNeedsYou(status) ? 'font-medium' : ''}`}>{c.title}</span>
                   <span className="shrink-0 text-xs text-[var(--text-faint)]">{formatRelativeTime(c.updatedAt)}</span>
                 </button>

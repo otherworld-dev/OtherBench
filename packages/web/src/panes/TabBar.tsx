@@ -7,6 +7,7 @@ import { useNow } from '../lib/useNow.js';
 import { chatStatus, useChatActivity } from '../state/chatStatus.js';
 import { isAllAppsTab } from '../state/allAppsTab.js';
 import { parseAppTab } from '../state/appTab.js';
+import { openChatFromClick } from '../state/openChatFromClick.js';
 import { LAYOUTS, type Layout } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
 import { useOtherBenchStore } from '../state/store.js';
@@ -174,7 +175,8 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
                 role="tab"
                 aria-selected={active}
                 tabIndex={active || (!tabs.some((x) => x.id === activeChatId) && index === 0) ? 0 : -1}
-                onClick={() => select(t.id)}
+                // A click goes on to the message box; the arrow keys (and Enter) keep to the tabs.
+                onClick={(e) => (e.detail > 0 && isChatTab(t.id) ? openChatFromClick(t.id, e) : select(t.id))}
                 onKeyDown={(e) => onKeyDown(e, index)}
                 title={t.title}
                 className={`flex min-w-0 items-center gap-1.5 py-1 pl-2.5 pr-1 text-xs ${active ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
