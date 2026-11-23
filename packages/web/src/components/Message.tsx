@@ -865,7 +865,7 @@ export interface MessageProps {
   };
   /** Unfolds a long user message: find in the chat is going to a match in its folded part. */
   showAllText?: boolean;
-  /** The thread's last message, outside a compare turn: the only one that may show the fresh chat card. */
+  /** The thread's last message, outside a compare turn: the only one that may show the fresh chat card, and whose status card takes ticks and answers. */
   offerHandover?: boolean;
 }
 
@@ -1014,7 +1014,8 @@ export const Message = memo(function Message({
 
       {todos && <TodoChecklist todos={todos} streaming={message.status === 'streaming'} />}
 
-      {agentStatus && <ChatStatusCard status={agentStatus} />}
+      {/* Ticks and answers only on the thread's last message: an earlier reply's items have been overtaken. */}
+      {agentStatus && <ChatStatusCard status={agentStatus} chatId={message.chatId} active={offerHandover && message.status === 'complete'} />}
 
       {userAttachmentParts.length > 0 && !editing && (
         <div className="flex flex-wrap gap-1.5">
