@@ -713,25 +713,17 @@ describe('Message thread cards', () => {
     expect(screen.queryByText(/update_todos|TodoWrite/)).toBeNull();
   });
 
-  it("shows the reply's chat status as a card, not as a tool call", () => {
+  // The status box is switched off (CHAT_STATUS_OFFERED, 2026-11-23): a reply saved with a status shows as a plain reply.
+  it("draws no status card for a reply's chat status, nor its call as a tool", () => {
     render(<Message message={base({ parts: [
       { type: 'text', text: 'Pushed it.' },
       { type: 'tool-call', id: 's1', name: 'set_chat_status', args: { done: false, left: ['update the docs', 'tag a release'] } },
       { type: 'tool-result', id: 's1', name: 'set_chat_status', result: 'Status set: 2 left.', isError: false },
     ] })} />);
-    const card = screen.getByTestId('chat-status-card');
-    expect(card).toHaveTextContent('Left:');
-    expect(card).toHaveTextContent('update the docs');
-    expect(card).toHaveTextContent('tag a release');
+    expect(screen.getByText('Pushed it.')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-status-card')).toBeNull();
+    expect(screen.queryByText(/update the docs/)).toBeNull();
     expect(screen.queryByText(/set_chat_status|Used 1 tool/)).toBeNull();
-  });
-
-  it('says Done on the card when nothing is left', () => {
-    render(<Message message={base({ parts: [
-      { type: 'tool-call', id: 's1', name: 'set_chat_status', args: { done: true } },
-      { type: 'tool-result', id: 's1', name: 'set_chat_status', result: 'Status set: done.', isError: false },
-    ] })} />);
-    expect(screen.getByTestId('chat-status-card')).toHaveTextContent('Done: nothing left in this chat');
   });
 
   it('shows a status call that was refused or bad as a tool, so the row not changing has a reason', () => {

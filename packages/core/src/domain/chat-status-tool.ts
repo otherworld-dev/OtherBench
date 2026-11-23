@@ -8,43 +8,36 @@ import { inputError, type Invalid, type ThreadToolError } from './thread-tools.j
 // No Node imports: the web UI imports this module.
 
 export const STATUS_TOOL = 'set_chat_status';
+
+/**
+ * Whether chats are given the tool, and whether a reply's status is drawn under it. Off since 2026-11-23: the box
+ * under each reply grew into a wall of instructions that repeated the reply, and a rework into a short, answerable
+ * box the same day made it worse (a model put its whole answer in the box and wrote no reply), so replies went back
+ * to plain ones. Everything else stays: a reply that already carries a status still gives its chat's row its word
+ * until the chat's next reply, and turning this on brings the tool and the box back.
+ */
+export const CHAT_STATUS_OFFERED: boolean = false;
 export const STATUS_MAX_ITEMS = 20;
 export const STATUS_ITEM_MAX_CHARS = 200;
 export const STATUS_ASK_MAX_CHARS = 2000;
-export const STATUS_MAX_OPTIONS = 4;
-export const STATUS_OPTION_MAX_CHARS = 40;
 
 export const SUBAGENT_STATUS_REFUSAL = "A helper can't set the chat's status; the main agent does that.";
 
 export const STATUS_TOOL_DESCRIPTION =
   "Tell the user whether this chat's work is finished. Call it in any turn in which work was done or agreed, once that work is finished and before your final message. " +
-  'It is a footer under your reply, never the reply. Your message must stand without it: answer what the user just asked, say what you did and found, ' +
-  'and explain any choice you are putting to them, in plain prose. A turn that sets the status and writes nothing to the user has not answered them, ' +
-  'and nor has one whose answer is only in an item or in your thinking. ' +
   'The user sees everything you write in the turn, before and after the call, so never write your reply out again after it. ' +
   'Set done: true only when everything you and the user agreed to do in this chat is finished. Otherwise set done: false and list what is still left, one short line each, ' +
   "including things that were discussed and parked for later. This is about the whole conversation, not the current task's steps (that's the checklist). " +
   'Give each item a "who": "you" when it waits on the user (something they must do, check, decide or answer before it can move), ' +
   '"me" when you will do it yourself once the user says carry on, "parked" when it was agreed to leave it for later. ' +
-  'Every "you" item also needs "ask": the question or request itself, written to the user in full. ' +
+  'Every "you" item also needs "ask": the question or request itself, written to the user in full, shown to them under your reply. ' +
   'Put in it everything they need to act without scrolling back: the exact command to run and where, the choice and what each answer leads to, what to send back. ' +
   'The user cannot see your thinking, so a question you only worked out there has not been asked. ' +
-  'The user sees the items in a box under your reply, one line each, and opens an item to read its ask. So keep "text" to a short title. ' +
-  'The ask is what to act from (the steps, the command, what each answer leads to); the answer, the explanation and the reasons belong in your reply. ' +
-  "Don't write the same steps out in both. " +
-  'Give a "you" item a "when": "now" if the user can act on it right away, "optional" if they can skip it and nothing is held up, ' +
-  '"later" if they cannot act until something else has happened (say what in the text). Only "now" items count as waiting on them, so mark as "now" only what is. ' +
-  'A "you" item with no "options" is a task, and the user ticks it when it is done. For a question with a few set answers, give them as "options" (short labels such as "Yes" and "No"), ' +
-  'and the user answers with a click. Their ticks and answers come back to you as their next message. ' +
   'Call it again every turn: a new reply starts with no status.';
 
 /** Who a left item waits on: the user, the agent, or nobody yet (parked). */
 export const STATUS_WHO = ['you', 'me', 'parked'] as const;
 export type StatusWho = (typeof STATUS_WHO)[number];
-
-/** When a "you" item can be acted on: right away, only if the user wants to, or not until something else has happened. */
-export const STATUS_WHEN = ['now', 'optional', 'later'] as const;
-export type StatusWhen = (typeof STATUS_WHEN)[number];
 
 export const STATUS_TOOL_PARAMETERS: Record<string, unknown> = {
   type: 'object',
@@ -68,18 +61,6 @@ export const STATUS_TOOL_PARAMETERS: Record<string, unknown> = {
             description:
               'Required when who is "you", left out otherwise: the question or request in full, addressed to the user (Markdown; put commands in code blocks). They read this, not your thinking.',
           },
-          when: {
-            type: 'string',
-            enum: [...STATUS_WHEN],
-            description: 'On a "you" item: "now" (the default) they can act on it right away; "optional" they can skip it; "later" it cannot be done until something else happens first.',
-          },
-          options: {
-            type: 'array',
-            minItems: 2,
-            maxItems: STATUS_MAX_OPTIONS,
-            items: { type: 'string', maxLength: STATUS_OPTION_MAX_CHARS },
-            description: 'On a "you" item that is a question with set answers: the answers as short labels, shown as buttons. Leave it out for a task, which gets a tick box.',
-          },
         },
         required: ['text', 'who'],
       },
@@ -91,15 +72,12 @@ export const STATUS_TOOL_PARAMETERS: Record<string, unknown> = {
 
 /**
  * One thing left. `who` is missing on replies saved before items said who they wait on; `ask`, the full question or
- * request for a "you" item, on replies saved before items carried one. `when` and `options` are a "you" item's only:
- * no `when` means now, and no `options` means a task to tick rather than a question to answer.
+ * request for a "you" item, on replies saved before items carried one.
  */
 export interface StatusItem {
   text: string;
   who?: StatusWho;
   ask?: string;
-  when?: StatusWhen;
-  options?: string[];
 }
 
 /** What the agent last said about the chat's work. */
@@ -111,17 +89,6 @@ export interface AgentStatus {
 const invalid = (reason: string): Invalid => ({ invalid: reason });
 
 const isWho = (v: unknown): v is StatusWho => typeof v === 'string' && (STATUS_WHO as readonly string[]).includes(v);
-const isWhen = (v: unknown): v is StatusWhen => typeof v === 'string' && (STATUS_WHEN as readonly string[]).includes(v);
-
-/** A question's answers: 2 to 4 short labels, trimmed, no two the same. Nothing given is no options. */
-function parseOptions(raw: unknown): string[] | undefined | Invalid {
-  if (raw === undefined || raw === null) return undefined;
-  if (!Array.isArray(raw) || raw.some((o) => typeof o !== 'string' || o.trim() === '')) return invalid('"options" must be a list of short answers.');
-  if (raw.length === 0) return undefined;
-  const labels = [...new Set((raw as string[]).map((o) => o.trim().slice(0, STATUS_OPTION_MAX_CHARS)))];
-  if (labels.length < 2 || labels.length > STATUS_MAX_OPTIONS) return invalid(`"options" takes 2 to ${STATUS_MAX_OPTIONS} different answers; leave it out for a task.`);
-  return labels;
-}
 
 /** One `left` entry: `{ text, who }`, or a plain line as replies saved before items said who. */
 function parseItem(raw: unknown): StatusItem | Invalid {
@@ -129,25 +96,14 @@ function parseItem(raw: unknown): StatusItem | Invalid {
     return raw.trim() === '' ? invalid('Each item in "left" needs some text.') : { text: raw.trim().slice(0, STATUS_ITEM_MAX_CHARS) };
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return invalid('Each item in "left" is { text, who }.');
-  const { text, who, ask, when, options } = raw as Record<string, unknown>;
+  const { text, who, ask } = raw as Record<string, unknown>;
   if (typeof text !== 'string' || text.trim() === '') return invalid('Each item in "left" needs some text.');
   if (ask !== undefined && ask !== null && typeof ask !== 'string') return invalid('"ask" must be text.');
   const item: StatusItem = { text: text.trim().slice(0, STATUS_ITEM_MAX_CHARS) };
   const asked = typeof ask === 'string' && ask.trim() !== '' ? ask.trim().slice(0, STATUS_ASK_MAX_CHARS) : undefined;
   if (who === undefined || who === null) return item;
   if (!isWho(who)) return invalid('"who" must be "you", "me" or "parked".');
-  if (when !== undefined && when !== null && !isWhen(when)) return invalid('"when" must be "now", "optional" or "later".');
-  const answers = parseOptions(options);
-  if (answers !== undefined && !Array.isArray(answers)) return answers;
-  if (who !== 'you') return { ...item, who };
-  return {
-    ...item,
-    who,
-    ...(asked !== undefined ? { ask: asked } : {}),
-    // "now" is what no `when` means, so it isn't kept.
-    ...(isWhen(when) && when !== 'now' ? { when } : {}),
-    ...(answers !== undefined ? { options: answers } : {}),
-  };
+  return who === 'you' && asked !== undefined ? { ...item, who, ask: asked } : { ...item, who };
 }
 
 /** `set_chat_status` input, held to its limits. */
@@ -170,60 +126,22 @@ export function parseChatStatus(args: unknown): AgentStatus | Invalid {
   return { done, left: items };
 }
 
-/** Which group a left item is shown in. */
-export type StatusGroupKey = 'now' | 'optional' | 'later' | 'me' | 'parked' | 'untagged';
-
-export function statusGroupOf(item: StatusItem): StatusGroupKey {
-  if (item.who === undefined) return 'untagged';
-  if (item.who !== 'you') return item.who;
-  return item.when ?? 'now';
-}
-
-/** How many of these items the user can act on now: the ones that hold the chat up until they do. */
+/** How many of these items wait on the user. */
 export function waitingOnUser(items: readonly StatusItem[]): number {
-  return items.filter((i) => statusGroupOf(i) === 'now').length;
+  return items.filter((i) => i.who === 'you').length;
 }
 
-/**
- * How each group of left items is headed, in the order they're shown; untagged items (older replies) come last.
- * `needsUser` marks the groups the user can do something about from the card: a tick or an answer.
- */
-export const STATUS_GROUPS: ReadonlyArray<{ key: StatusGroupKey; label: string; needsUser: boolean }> = [
-  { key: 'now', label: 'Needs you now', needsUser: true },
-  { key: 'optional', label: 'Optional', needsUser: true },
-  { key: 'later', label: 'For you later', needsUser: false },
-  { key: 'me', label: 'Next from me', needsUser: false },
-  { key: 'parked', label: 'Parked', needsUser: false },
-  { key: 'untagged', label: 'Left', needsUser: false },
+/** How each group of left items is headed, in the order they're shown; untagged items (older replies) come last. */
+export const STATUS_GROUPS: ReadonlyArray<{ who: StatusWho | undefined; label: string }> = [
+  { who: 'you', label: 'Waiting on you' },
+  { who: 'me', label: 'Next from me' },
+  { who: 'parked', label: 'Parked' },
+  { who: undefined, label: 'Left' },
 ];
 
-export interface StatusGroup {
-  key: StatusGroupKey;
-  label: string;
-  needsUser: boolean;
-  items: StatusItem[];
-}
-
-/** The left items in their groups, in `STATUS_GROUPS` order, empty groups dropped. */
-export function groupLeft(items: readonly StatusItem[]): StatusGroup[] {
-  return STATUS_GROUPS.map((g) => ({ ...g, items: items.filter((i) => statusGroupOf(i) === g.key) })).filter((g) => g.items.length > 0);
-}
-
-/** What the user did about one item on the card: ticked a task as done, or picked one of a question's answers. */
-export type StatusAnswer = { done: true } | { option: string };
-
-/**
- * The user's ticks and answers as the message they send back, one line per item in the card's order; '' when there
- * are none. `answers` is keyed by the item's index in `items`.
- */
-export function statusReplyText(items: readonly StatusItem[], answers: Readonly<Record<number, StatusAnswer>>): string {
-  return items
-    .flatMap((item, i) => {
-      const answer = answers[i];
-      if (answer === undefined) return [];
-      return ['done' in answer ? `Done: ${item.text}` : `${item.text}: ${answer.option}`];
-    })
-    .join('\n');
+/** The left items grouped by who they wait on, in `STATUS_GROUPS` order, empty groups dropped. */
+export function groupLeft(items: readonly StatusItem[]): Array<{ who: StatusWho | undefined; label: string; items: StatusItem[] }> {
+  return STATUS_GROUPS.map((g) => ({ ...g, items: items.filter((i) => i.who === g.who) })).filter((g) => g.items.length > 0);
 }
 
 /**
@@ -245,14 +163,9 @@ function newCallProblem(status: AgentStatus): string | null {
  * Ends every successful result. Claude Code tells the model to end a turn with text, so a model that wrote its reply
  * before the call wrote the whole reply again after it (2026-11-20, ~1 call in 15); the UI hides the call, so the two
  * copies showed back to back. The model reads this right before deciding what to write next.
- *
- * It also has to cover the opposite case (2026-11-23): asked "why are all branches on gitea?", a model worked the
- * answer out in its thinking, set the status and ended the turn with no text at all, so the user got a box of old
- * items and no answer. The tool can't see what the reply has written so far, so the note spells out both cases.
  */
 export const STATUS_SET_NOTE =
-  'The status box is not your reply. If you have not yet written to the user this turn (an answer to what they just asked, or what you did and found), ' +
-  "write it now, in plain prose: they cannot see your thinking. If you have, it is already on the user's screen: don't repeat it, and end the turn here.";
+  "Everything you already wrote this turn is on the user's screen: don't repeat it. If your reply is written, end the turn here.";
 
 /** `set_chat_status`: nothing to store or wait for; the row and the card read the call itself. */
 export function runStatusCommand(args: unknown): string | ThreadToolError {
@@ -262,7 +175,7 @@ export function runStatusCommand(args: unknown): string | ThreadToolError {
   if (problem !== null) return inputError(problem);
   if (status.done) return `Status set: done. ${STATUS_SET_NOTE}`;
   const yours = waitingOnUser(status.left);
-  return `Status set: ${status.left.length} left${yours > 0 ? `, ${yours} waiting on the user now` : ''}. ${STATUS_SET_NOTE}`;
+  return `Status set: ${status.left.length} left${yours > 0 ? `, ${yours} waiting on the user` : ''}. ${STATUS_SET_NOTE}`;
 }
 
 /** A result that is a refusal or an input error: Claude Code sets `isError`; the API engines store `{ error: true }` with isError false. */

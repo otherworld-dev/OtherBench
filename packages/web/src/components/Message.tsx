@@ -1,7 +1,7 @@
 import { memo, useState, type JSX, type ReactNode } from 'react';
 import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@otherbench/core/ports/tool-provider.js';
 import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@otherbench/core/domain/thread-tools.js';
-import { agentStatusOf, failedStatusCalls, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
+import { agentStatusOf, CHAT_STATUS_OFFERED, failedStatusCalls, STATUS_TOOL } from '@otherbench/core/domain/chat-status-tool.js';
 import { ChatStatusCard } from './ChatStatusCard.js';
 import type { CanonMessage, Part, SubagentStatus } from '@otherbench/core/types/messages.js';
 import type { MediaProgress } from '@otherbench/core/ports/media.js';
@@ -865,7 +865,7 @@ export interface MessageProps {
   };
   /** Unfolds a long user message: find in the chat is going to a match in its folded part. */
   showAllText?: boolean;
-  /** The thread's last message, outside a compare turn: the only one that may show the fresh chat card, and whose status card takes ticks and answers. */
+  /** The thread's last message, outside a compare turn: the only one that may show the fresh chat card. */
   offerHandover?: boolean;
 }
 
@@ -947,7 +947,8 @@ export const Message = memo(function Message({
     : [];
   const todos = isUser ? null : latestTodos(message.parts);
   // Not on a reply that failed or was stopped: its row says so, and the card would say Done.
-  const agentStatus = isUser || (message.status !== 'complete' && message.status !== 'streaming') ? null : agentStatusOf(message.parts);
+  // Nor at all while the tool is switched off: an earlier reply's status isn't drawn either.
+  const agentStatus = !CHAT_STATUS_OFFERED || isUser || (message.status !== 'complete' && message.status !== 'streaming') ? null : agentStatusOf(message.parts);
 
   return (
     <article
@@ -1014,8 +1015,7 @@ export const Message = memo(function Message({
 
       {todos && <TodoChecklist todos={todos} streaming={message.status === 'streaming'} />}
 
-      {/* Ticks and answers only on the thread's last message: an earlier reply's items have been overtaken. */}
-      {agentStatus && <ChatStatusCard status={agentStatus} chatId={message.chatId} active={offerHandover && message.status === 'complete'} />}
+      {agentStatus && <ChatStatusCard status={agentStatus} />}
 
       {userAttachmentParts.length > 0 && !editing && (
         <div className="flex flex-wrap gap-1.5">

@@ -7,8 +7,7 @@ import { BASE_URL } from '../playwright.config.js';
  * browser, on the keyless mock connection: `#status left a|b` and
  * `#status done` call the real set_chat_status tool, and the chat's row says
  * "2 left" (nothing for the user), "1 for you" with its ask shown in full, then "Done", then "Your turn" again
- * after a reply that doesn't set it. A "you" item with no ask is refused, so that reply sets no status. A tick and an
- * answer on the card go into the message box as one message.
+ * after a reply that doesn't set it. A "you" item with no ask is refused, so that reply sets no status.
  * Names are unique per test: the e2e server keeps one database.
  */
 
@@ -35,7 +34,9 @@ async function send(page: Page, text: string): Promise<void> {
   await expect(page.getByLabel('streaming')).toHaveCount(0, { timeout: 15_000 });
 }
 
-test('the agent marks the chat: N left, then Done, then Your turn after a reply that says nothing', async ({ page, request }) => {
+// Skipped while the status tool is switched off (core CHAT_STATUS_OFFERED, 2026-11-23): chats aren't given it, so
+// `#status` has nothing to call. Take the skip off when it is switched back on.
+test.skip('the agent marks the chat: N left, then Done, then Your turn after a reply that says nothing', async ({ page, request }) => {
   const title = `Status ${suffix()}`;
   const { chatId } = await seed(request, title);
   await page.goto('/');
@@ -51,27 +52,11 @@ test('the agent marks the chat: N left, then Done, then Your turn after a reply 
 
   await send(page, '#status left you:try it live=Open the app and tell me if the sidebar loads|me:push to github|parked:dark mode');
   await expect(word).toHaveText('1 for you');
-  await expect(word).toHaveAttribute('title', 'Needs you now:\n  try it live\nNext from me:\n  push to github\nParked:\n  dark mode');
+  await expect(word).toHaveAttribute('title', 'Waiting on you:\n  try it live\nNext from me:\n  push to github\nParked:\n  dark mode');
   const grouped = page.locator('article[data-role="assistant"]').last().getByTestId('chat-status-card');
-  await expect(grouped.getByRole('list', { name: 'Needs you now' })).toContainText('try it live');
+  await expect(grouped.getByRole('list', { name: 'Waiting on you' })).toContainText('try it live');
   await expect(grouped.getByTestId('chat-status-ask')).toHaveText('Open the app and tell me if the sidebar loads');
-  // The rest folds into one line, and opens on a click.
-  await expect(grouped.getByRole('list', { name: 'Parked' })).toHaveCount(0);
-  await grouped.getByRole('button', { name: /Not waiting on you: 1 next from me · 1 parked/ }).click();
   await expect(grouped.getByRole('list', { name: 'Parked' })).toContainText('dark mode');
-
-  // Two things for the user, one of them optional with set answers: closed to a line each, counted as one.
-  await send(page, '#status left you:set the token=Give it read and write|you-optional:retry locked pages=Retry once by itself? {Yes/No}|you-later:first issue=Tap Work on it now');
-  await expect(word).toHaveText('1 for you');
-  const acting = page.locator('article[data-role="assistant"]').last().getByTestId('chat-status-card');
-  await expect(acting.getByTestId('chat-status-ask')).toHaveCount(0);
-  await acting.getByRole('button', { name: 'set the token' }).click();
-  await expect(acting.getByTestId('chat-status-ask')).toHaveText('Give it read and write');
-  await acting.getByRole('checkbox', { name: 'Done: set the token' }).check();
-  await acting.getByRole('button', { name: 'No', exact: true }).click();
-  await acting.getByTestId('chat-status-reply').click();
-  await expect(page.getByRole('textbox', { name: /message/i })).toHaveValue('Done: set the token\nretry locked pages: No');
-  await page.getByRole('textbox', { name: /message/i }).fill('');
 
   // Waiting on the user with nothing asked: refused, so this reply sets no status and the thread shows the failed call.
   await send(page, '#status left you:approve it');
