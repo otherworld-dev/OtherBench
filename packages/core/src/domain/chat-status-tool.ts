@@ -18,6 +18,9 @@ export const SUBAGENT_STATUS_REFUSAL = "A helper can't set the chat's status; th
 
 export const STATUS_TOOL_DESCRIPTION =
   "Tell the user whether this chat's work is finished. Call it in any turn in which work was done or agreed, once that work is finished and before your final message. " +
+  'It is a footer under your reply, never the reply. Your message must stand without it: answer what the user just asked, say what you did and found, ' +
+  'and explain any choice you are putting to them, in plain prose. A turn that sets the status and writes nothing to the user has not answered them, ' +
+  'and nor has one whose answer is only in an item or in your thinking. ' +
   'The user sees everything you write in the turn, before and after the call, so never write your reply out again after it. ' +
   'Set done: true only when everything you and the user agreed to do in this chat is finished. Otherwise set done: false and list what is still left, one short line each, ' +
   "including things that were discussed and parked for later. This is about the whole conversation, not the current task's steps (that's the checklist). " +
@@ -26,8 +29,9 @@ export const STATUS_TOOL_DESCRIPTION =
   'Every "you" item also needs "ask": the question or request itself, written to the user in full. ' +
   'Put in it everything they need to act without scrolling back: the exact command to run and where, the choice and what each answer leads to, what to send back. ' +
   'The user cannot see your thinking, so a question you only worked out there has not been asked. ' +
-  'The user sees the items in a box under your reply, one line each, and opens an item to read its ask. So keep "text" to a short title, ' +
-  "and don't write the same instructions out in your reply as well: say there in a line what is waiting and leave the detail to the ask. " +
+  'The user sees the items in a box under your reply, one line each, and opens an item to read its ask. So keep "text" to a short title. ' +
+  'The ask is what to act from (the steps, the command, what each answer leads to); the answer, the explanation and the reasons belong in your reply. ' +
+  "Don't write the same steps out in both. " +
   'Give a "you" item a "when": "now" if the user can act on it right away, "optional" if they can skip it and nothing is held up, ' +
   '"later" if they cannot act until something else has happened (say what in the text). Only "now" items count as waiting on them, so mark as "now" only what is. ' +
   'A "you" item with no "options" is a task, and the user ticks it when it is done. For a question with a few set answers, give them as "options" (short labels such as "Yes" and "No"), ' +
@@ -241,9 +245,14 @@ function newCallProblem(status: AgentStatus): string | null {
  * Ends every successful result. Claude Code tells the model to end a turn with text, so a model that wrote its reply
  * before the call wrote the whole reply again after it (2026-11-20, ~1 call in 15); the UI hides the call, so the two
  * copies showed back to back. The model reads this right before deciding what to write next.
+ *
+ * It also has to cover the opposite case (2026-11-23): asked "why are all branches on gitea?", a model worked the
+ * answer out in its thinking, set the status and ended the turn with no text at all, so the user got a box of old
+ * items and no answer. The tool can't see what the reply has written so far, so the note spells out both cases.
  */
 export const STATUS_SET_NOTE =
-  "Everything you already wrote this turn is on the user's screen: don't repeat it. If your reply is written, end the turn here.";
+  'The status box is not your reply. If you have not yet written to the user this turn (an answer to what they just asked, or what you did and found), ' +
+  "write it now, in plain prose: they cannot see your thinking. If you have, it is already on the user's screen: don't repeat it, and end the turn here.";
 
 /** `set_chat_status`: nothing to store or wait for; the row and the card read the call itself. */
 export function runStatusCommand(args: unknown): string | ThreadToolError {
