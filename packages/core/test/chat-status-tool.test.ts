@@ -9,7 +9,6 @@ import {
   STATUS_TOOL_DESCRIPTION,
   SUBAGENT_STATUS_REFUSAL,
   groupLeft,
-  statusReplyText,
   waitingOnUser,
 } from '../src/domain/chat-status-tool.js';
 import { PermissionBroker } from '../src/domain/permissions.js';
@@ -57,35 +56,6 @@ describe('parseChatStatus', () => {
     });
   });
 
-  it('keeps when and options on a "you" item, and drops them on the others', () => {
-    expect(
-      parseChatStatus({
-        done: false,
-        left: [
-          { text: 'retry', who: 'you', ask: 'Retry once?', when: 'optional', options: [' Yes ', 'No'] },
-          { text: 'first issue', who: 'you', ask: 'Tap it.', when: 'later' },
-          { text: 'token', who: 'you', ask: 'Set it.', when: 'now' },
-          { text: 'push', who: 'me', when: 'later', options: ['a', 'b'] },
-        ],
-      })
-    ).toEqual({
-      done: false,
-      left: [
-        { text: 'retry', who: 'you', ask: 'Retry once?', when: 'optional', options: ['Yes', 'No'] },
-        { text: 'first issue', who: 'you', ask: 'Tap it.', when: 'later' },
-        { text: 'token', who: 'you', ask: 'Set it.' },
-        { text: 'push', who: 'me' },
-      ],
-    });
-  });
-
-  it('takes no options, or an empty list, as a task', () => {
-    expect(parseChatStatus({ done: false, left: [{ text: 'x', who: 'you', ask: 'y', options: [] }, { text: 'z', who: 'you', ask: 'y', options: null }] })).toEqual({
-      done: false,
-      left: [{ text: 'x', who: 'you', ask: 'y' }, { text: 'z', who: 'you', ask: 'y' }],
-    });
-  });
-
   it('still reads a "you" item saved before items carried an ask', () => {
     expect(parseChatStatus({ done: false, left: [{ text: 'try it', who: 'you' }] })).toEqual({ done: false, left: [{ text: 'try it', who: 'you' }] });
   });
@@ -114,11 +84,6 @@ describe('parseChatStatus', () => {
     ['an item with no text', { done: false, left: [{ who: 'you' }] }],
     ['an unknown who', { done: false, left: [{ text: 'x', who: 'them' }] }],
     ['an ask that is not text', { done: false, left: [{ text: 'x', who: 'you', ask: 3 }] }],
-    ['an unknown when', { done: false, left: [{ text: 'x', who: 'you', ask: 'y', when: 'soon' }] }],
-    ['one option', { done: false, left: [{ text: 'x', who: 'you', ask: 'y', options: ['Yes'] }] }],
-    ['the same option twice', { done: false, left: [{ text: 'x', who: 'you', ask: 'y', options: ['Yes', ' Yes'] }] }],
-    ['five options', { done: false, left: [{ text: 'x', who: 'you', ask: 'y', options: ['a', 'b', 'c', 'd', 'e'] }] }],
-    ['an option that is not text', { done: false, left: [{ text: 'x', who: 'you', ask: 'y', options: ['a', 3] }] }],
     ['no object', null],
   ])('refuses %s', (_label, args) => {
     expect('invalid' in parseChatStatus(args)).toBe(true);
@@ -129,48 +94,22 @@ describe('waitingOnUser', () => {
   it('counts only the items that wait on the user', () => {
     expect(waitingOnUser([{ text: 'a', who: 'you' }, { text: 'b', who: 'me' }, { text: 'c' }, { text: 'd', who: 'you' }, { text: 'e', who: 'parked' }])).toBe(2);
   });
-
-  it('leaves out what the user can skip or cannot do yet', () => {
-    expect(waitingOnUser([{ text: 'a', who: 'you' }, { text: 'b', who: 'you', when: 'optional' }, { text: 'c', who: 'you', when: 'later' }])).toBe(1);
-  });
 });
 
 describe('groupLeft', () => {
   it('groups by who: you, me, parked, then untagged, dropping empty groups', () => {
     expect(groupLeft([{ text: 'docs', who: 'parked' }, { text: 'old' }, { text: 'try it', who: 'you' }, { text: 'check', who: 'you' }])).toEqual([
-      { key: 'now', label: 'Needs you now', needsUser: true, items: [{ text: 'try it', who: 'you' }, { text: 'check', who: 'you' }] },
-      { key: 'parked', label: 'Parked', needsUser: false, items: [{ text: 'docs', who: 'parked' }] },
-      { key: 'untagged', label: 'Left', needsUser: false, items: [{ text: 'old' }] },
+      { who: 'you', label: 'Waiting on you', items: [{ text: 'try it', who: 'you' }, { text: 'check', who: 'you' }] },
+      { who: 'parked', label: 'Parked', items: [{ text: 'docs', who: 'parked' }] },
+      { who: undefined, label: 'Left', items: [{ text: 'old' }] },
     ]);
-  });
-
-  it('splits what waits on the user by when: now, optional, then later', () => {
-    const groups = groupLeft([{ text: 'c', who: 'you', when: 'later' }, { text: 'push', who: 'me' }, { text: 'b', who: 'you', when: 'optional' }, { text: 'a', who: 'you' }]);
-    expect(groups.map((g) => [g.label, g.needsUser, g.items.map((i) => i.text)])).toEqual([
-      ['Needs you now', true, ['a']],
-      ['Optional', true, ['b']],
-      ['For you later', false, ['c']],
-      ['Next from me', false, ['push']],
-    ]);
-  });
-});
-
-describe('statusReplyText', () => {
-  const items = [{ text: 'set the token', who: 'you' as const }, { text: 'push', who: 'me' as const }, { text: 'retry a locked page', who: 'you' as const, options: ['Yes', 'No'] }];
-
-  it('writes a line per tick and answer, in the order of the items', () => {
-    expect(statusReplyText(items, { 2: { option: 'No' }, 0: { done: true } })).toBe('Done: set the token\nretry a locked page: No');
-  });
-
-  it('is empty with nothing ticked or answered', () => {
-    expect(statusReplyText(items, {})).toBe('');
   });
 });
 
 describe('runStatusCommand', () => {
   it('answers with what was set', () => {
     expect(runStatusCommand({ done: false, left: [{ text: 'a', who: 'me' }, { text: 'b', who: 'parked' }] })).toBe(`Status set: 2 left. ${STATUS_SET_NOTE}`);
-    expect(runStatusCommand({ done: false, left: [{ text: 'a', who: 'you', ask: 'Run x?' }, { text: 'b', who: 'me' }, { text: 'c', who: 'you', ask: 'Yes or no?' }] })).toBe(`Status set: 3 left, 2 waiting on the user now. ${STATUS_SET_NOTE}`);
+    expect(runStatusCommand({ done: false, left: [{ text: 'a', who: 'you', ask: 'Run x?' }, { text: 'b', who: 'me' }, { text: 'c', who: 'you', ask: 'Yes or no?' }] })).toBe(`Status set: 3 left, 2 waiting on the user. ${STATUS_SET_NOTE}`);
     expect(runStatusCommand({ done: true })).toBe(`Status set: done. ${STATUS_SET_NOTE}`);
   });
 
@@ -179,10 +118,6 @@ describe('runStatusCommand', () => {
   it('tells the model that what it already wrote is on screen, so it does not write its reply again', () => {
     expect(STATUS_SET_NOTE).toMatch(/already/i);
     expect(STATUS_SET_NOTE).toMatch(/don't (repeat|write it again)/i);
-  });
-
-  it('tells the model the box carries the asks, so the reply does not write them out as well', () => {
-    expect(STATUS_TOOL_DESCRIPTION).toMatch(/don't write the same instructions out in your reply/i);
   });
 
   it('asks for the call before the final message, not after it', () => {

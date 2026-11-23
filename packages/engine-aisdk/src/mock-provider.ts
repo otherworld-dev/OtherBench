@@ -645,7 +645,7 @@ export class MockChatEngine implements ChatEngine {
   /**
    * `#status done` / `#status left <a>|<b>` (spec 2026-11-15-chat-done-status-design): one `set_chat_status` call
    * through the real tool when offered, then "All finished." or "Some left.". An item may start `you:`, `me:` or
-   * `parked:` to say who it waits on (`you:line=ask` adds the full ask, `you-optional:` / `you-later:` its when, an ask ending `{Yes/No}` its answers); without one it goes as a plain line, as
+   * `parked:` to say who it waits on (`you:line=ask` adds the full ask); without one it goes as a plain line, as
    * replies did before items said who (which a new call now refuses).
    */
   private async *streamStatusTurn(req: EngineRequest, left: Array<string | MockStatusItem> | null, tokensIn: number): AsyncGenerator<EngineEvent> {
@@ -880,26 +880,13 @@ interface MockStatusItem {
   text: string;
   who: string;
   ask?: string;
-  when?: string;
-  options?: string[];
 }
 
-/**
- * A `#status left` item: `you:x`, `me:x` or `parked:x` says who it waits on, `you:x=ask` adds the ask; anything else
- * is a plain line. `you-optional:` and `you-later:` set a "you" item's `when`, and an ask ending `{Yes/No}` makes it a
- * question with those answers.
- */
+/** A `#status left` item: `you:x`, `me:x` or `parked:x` says who it waits on, `you:x=ask` adds the ask; anything else is a plain line. */
 function mockStatusItem(raw: string): string | MockStatusItem {
-  const tagged = /^(you|me|parked)(?:-(optional|later))?:(.*)$/s.exec(raw.trim());
-  if (tagged?.[1] === undefined || tagged[3] === undefined) return raw.trim();
-  const [text = '', ...rest] = tagged[3].split('=');
-  const answers = /\{([^{}]+)\}\s*$/.exec(rest.join('='));
-  const ask = (answers ? rest.join('=').slice(0, answers.index) : rest.join('=')).trim();
-  return {
-    text: text.trim(),
-    who: tagged[1],
-    ...(ask !== '' ? { ask } : {}),
-    ...(tagged[2] !== undefined ? { when: tagged[2] } : {}),
-    ...(answers?.[1] !== undefined ? { options: answers[1].split('/').map((o) => o.trim()) } : {}),
-  };
+  const tagged = /^(you|me|parked):(.*)$/s.exec(raw.trim());
+  if (tagged?.[1] === undefined || tagged[2] === undefined) return raw.trim();
+  const [text = '', ...rest] = tagged[2].split('=');
+  const ask = rest.join('=').trim();
+  return { text: text.trim(), who: tagged[1], ...(ask !== '' ? { ask } : {}) };
 }

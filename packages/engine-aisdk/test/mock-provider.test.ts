@@ -299,16 +299,6 @@ describe('MockChatEngine', () => {
       expect(execute).toHaveBeenCalledWith({ done: false, left: [{ text: 'try it', who: 'you', ask: 'Open it, a=b?' }, { text: 'push', who: 'me' }, 'plain'] }, expect.anything());
     });
 
-    it('#status left sends when a "you" item can be done and the answers it takes', async () => {
-      const execute = vi.fn(async () => 'Status set: 2 left.');
-      const tool: ToolSpec = { name: 'set_chat_status', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
-      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#status left you-optional:retry=Retry a locked page once? {Yes/No}|you-later:first issue=Tap it', { tools: [tool] })));
-      expect(execute).toHaveBeenCalledWith(
-        { done: false, left: [{ text: 'retry', who: 'you', ask: 'Retry a locked page once?', when: 'optional', options: ['Yes', 'No'] }, { text: 'first issue', who: 'you', ask: 'Tap it', when: 'later' }] },
-        expect.anything()
-      );
-    });
-
     it('#status done calls it with done: true, then says all finished', async () => {
       const execute = vi.fn(async () => 'Status set: done.');
       const tool: ToolSpec = { name: 'set_chat_status', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
