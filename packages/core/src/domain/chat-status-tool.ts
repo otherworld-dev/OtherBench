@@ -8,6 +8,15 @@ import { inputError, type Invalid, type ThreadToolError } from './thread-tools.j
 // No Node imports: the web UI imports this module.
 
 export const STATUS_TOOL = 'set_chat_status';
+
+/**
+ * Whether chats are given the tool, and whether a reply's status is drawn under it. Off since 2026-11-23: the box
+ * under each reply grew into a wall of instructions that repeated the reply, and a rework into a short, answerable
+ * box the same day made it worse (a model put its whole answer in the box and wrote no reply), so replies went back
+ * to plain ones. Everything else stays: a reply that already carries a status still gives its chat's row its word
+ * until the chat's next reply, and turning this on brings the tool and the box back.
+ */
+export const CHAT_STATUS_OFFERED: boolean = false;
 export const STATUS_MAX_ITEMS = 20;
 export const STATUS_ITEM_MAX_CHARS = 200;
 export const STATUS_ASK_MAX_CHARS = 2000;

@@ -34,7 +34,9 @@ async function send(page: Page, text: string): Promise<void> {
   await expect(page.getByLabel('streaming')).toHaveCount(0, { timeout: 15_000 });
 }
 
-test('the agent marks the chat: N left, then Done, then Your turn after a reply that says nothing', async ({ page, request }) => {
+// Skipped while the status tool is switched off (core CHAT_STATUS_OFFERED, 2026-11-23): chats aren't given it, so
+// `#status` has nothing to call. Take the skip off when it is switched back on.
+test.skip('the agent marks the chat: N left, then Done, then Your turn after a reply that says nothing', async ({ page, request }) => {
   const title = `Status ${suffix()}`;
   const { chatId } = await seed(request, title);
   await page.goto('/');

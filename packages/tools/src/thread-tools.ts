@@ -13,7 +13,7 @@ import {
   runTodoCommand,
   type AskFn,
 } from '@otherbench/core/domain/thread-tools.js';
-import { runStatusCommand, STATUS_TOOL, STATUS_TOOL_DESCRIPTION, STATUS_TOOL_PARAMETERS } from '@otherbench/core/domain/chat-status-tool.js';
+import { CHAT_STATUS_OFFERED, runStatusCommand, STATUS_TOOL, STATUS_TOOL_DESCRIPTION, STATUS_TOOL_PARAMETERS } from '@otherbench/core/domain/chat-status-tool.js';
 import type { ToolSpec } from '@otherbench/core/ports/tool-provider.js';
 
 // Thread tools for API engines (spec 2026-10-12-thread-cards-design §5).
@@ -38,5 +38,5 @@ export function statusTool(): ToolSpec {
 }
 
 export function threadTools(askUser: AskFn): ToolSpec[] {
-  return [todoTool(), askTool(askUser), planTool(askUser), statusTool()];
+  return [todoTool(), askTool(askUser), planTool(askUser), ...(CHAT_STATUS_OFFERED ? [statusTool()] : [])];
 }

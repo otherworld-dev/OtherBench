@@ -6,6 +6,7 @@ import type { ToolApprovalEvent, ToolContext, UserAsk } from '@otherbench/core/p
 import type { ToolPolicy } from '@otherbench/core/types/config.js';
 import type { McpServerManager } from '../src/mcp/manager.js';
 import { OtherBenchToolProvider } from '../src/provider.js';
+import { statusTool } from '../src/thread-tools.js';
 
 const emptyMcp: Pick<McpServerManager, 'listFor' | 'refresh' | 'shutdown'> = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
 const off: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', artifacts: false, recall: false };
@@ -30,13 +31,17 @@ describe('thread tools for API profiles', () => {
       ['update_todos', 'thread', 'read'],
       ['ask_user', 'thread', 'read'],
       ['propose_plan', 'thread', 'read'],
-      ['set_chat_status', 'thread', 'read'],
     ]);
   });
 
+  // Switched off on 2026-11-23 (CHAT_STATUS_OFFERED): replies went back to plain ones, with no status box.
+  it('does not offer set_chat_status while it is switched off', async () => {
+    const { provider } = setup();
+    expect((await provider.listTools(off)).map((t) => t.name)).not.toContain('set_chat_status');
+  });
+
   it('set_chat_status answers with what was set, and refuses bad input', async () => {
-    const { tool } = setup();
-    const status = await tool('set_chat_status');
+    const status = statusTool();
     expect(await status.execute({ done: false, left: [{ text: 'push', who: 'me' }, { text: 'docs', who: 'you', ask: 'Read the docs page and say if it is clear.' }] }, ctx())).toMatch(
       /^Status set: 2 left, 1 waiting on the user\. /,
     );
