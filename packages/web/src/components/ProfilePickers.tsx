@@ -1,9 +1,25 @@
-import type { Dispatch, JSX, SetStateAction } from 'react';
+import { useEffect, useRef } from 'react';
+import type { Dispatch, JSX, RefObject, SetStateAction } from 'react';
 import type { Connection, Profile } from '@otherbench/core/types/config.js';
 
 /** True when the profile runs through Claude Code (its own tools, needs a workspace) rather than OtherBench's tool layer. */
 export function isClaudeCodeProfile(profile: Profile, connections: Connection[]): boolean {
   return connections.find((c) => c.id === profile.connectionId)?.kind === 'claude_code';
+}
+
+/** Closes an open list on a press anywhere outside `ref`, which wraps the list and the button that opens it. */
+function useCloseOnOutsidePress(open: boolean, setOpen: Dispatch<SetStateAction<boolean>>): RefObject<HTMLDivElement | null> {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent): void => {
+      if (e.target instanceof Node && ref.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open, setOpen]);
+  return ref;
 }
 
 export interface ProfilePickerProps {
@@ -18,9 +34,10 @@ export interface ProfilePickerProps {
 
 /** The composer toolbar's profile chip and its list: which profile the next message goes to. */
 export function ProfilePicker({ profiles, connections, primaryProfile, selectedProfileIds, pickerOpen, setPickerOpen, choosePrimaryProfile }: ProfilePickerProps): JSX.Element {
+  const rootRef = useCloseOnOutsidePress(pickerOpen, setPickerOpen);
   return (
     /* Laid out at its least and grown back to the full name, so the name is cut before anything wraps. */
-    <div className="relative min-w-14 max-w-max shrink grow basis-14">
+    <div ref={rootRef} className="relative min-w-14 max-w-max shrink grow basis-14">
       <button
         type="button"
         onClick={() => setPickerOpen((o) => !o)}
@@ -66,6 +83,7 @@ export interface ComparePickerProps {
 
 /** The profiles the next message is compared against, as chips, and the `+` list that picks them. */
 export function ComparePicker({ profiles, comparedProfiles, selectedProfileIds, comparePickerOpen, setComparePickerOpen, togglePickerProfile }: ComparePickerProps): JSX.Element {
+  const rootRef = useCloseOnOutsidePress(comparePickerOpen, setComparePickerOpen);
   return (
     <>
       {comparedProfiles.map((p) => (
@@ -74,7 +92,7 @@ export function ComparePicker({ profiles, comparedProfiles, selectedProfileIds, 
         </span>
       ))}
 
-      <div className="relative shrink-0">
+      <div ref={rootRef} className="relative shrink-0">
         <button
           type="button"
           onClick={() => setComparePickerOpen((o) => !o)}
