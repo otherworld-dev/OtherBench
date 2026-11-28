@@ -813,6 +813,36 @@ describe('Composer profile picker', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
     expect(useOtherBenchStore.getState().chats[0]!.profileId).toBe('p1');
   });
+
+  it('closes the profile list on a click outside it, and keeps it open for a press inside', async () => {
+    const chat = makeChat({ profileId: 'p1' });
+    useOtherBenchStore.getState().setChats([chat]);
+    const user = userEvent.setup();
+    render(<Composer chat={chat} />);
+
+    await user.click(screen.getByRole('button', { name: 'Default · mock-standard' }));
+    const list = screen.getByRole('listbox', { name: 'Profile' });
+    await user.pointer({ keys: '[MouseLeft>]', target: list });
+    expect(screen.getByRole('listbox', { name: 'Profile' })).toBeInTheDocument();
+
+    await user.click(document.body);
+    expect(screen.queryByRole('listbox', { name: 'Profile' })).not.toBeInTheDocument();
+    expect(mockedChatsPatch).not.toHaveBeenCalled();
+  });
+
+  it('closes the compare list on a click outside it', async () => {
+    const chat = makeChat({ profileId: 'p1' });
+    useOtherBenchStore.getState().setChats([chat]);
+    const user = userEvent.setup();
+    render(<Composer chat={chat} />);
+
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Opus' }));
+    expect(screen.getByRole('listbox', { name: 'Compare profiles' })).toBeInTheDocument();
+
+    await user.click(document.body);
+    expect(screen.queryByRole('listbox', { name: 'Compare profiles' })).not.toBeInTheDocument();
+  });
 });
 
 describe('Composer auto mode toggle', () => {
